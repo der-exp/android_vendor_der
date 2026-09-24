@@ -27,13 +27,19 @@ data class CtlReply(
 
 /** Движок — через управляющий сокет. Реализует оболочка.
  *
- *  `putFile` — команда сокета `put-file` (появится в движке следующей волной): положить файл
- *  списка или подписки под именем `name` в каталог списков движка. До того оболочка отвечает на
- *  неё отказом сервера `unknown-command`, и логика обязана это пережить (см. SpecPusher). */
+ *  Файловые команды сокета (steer/docs/ctl.md, «put-file, list-files, rm-file»):
+ *   - `putFile` — `put-file <имя>`: положить файл списка или подписки в каталог списков движка;
+ *   - `listFiles` — `list-files`: что там лежит (`{"files":[{"name","size","mtime"}]}`);
+ *   - `rmFile` — `rm-file <имя>`: убрать файл, на который больше не ссылается спека.
+ *  Движок старше этих команд отвечает отказом сервера `unknown-command`, и логика обязана это
+ *  пережить: без `put-file` применение со списками честно не проходит (Dispatcher.push), без
+ *  `list-files`/`rm-file` старые файлы просто остаются (Dispatcher.sweep). */
 interface Engine {
     fun check(spec: String): CtlReply
     fun apply(spec: String): CtlReply
     fun putFile(name: String, data: ByteArray): CtlReply
+    fun listFiles(): CtlReply
+    fun rmFile(name: String): CtlReply
     fun status(): CtlReply
 }
 

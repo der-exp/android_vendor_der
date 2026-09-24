@@ -81,5 +81,7 @@ internal class SocketEngine(private val path: String = "/data/misc/steer/steer.s
     override fun check(spec: String) = call("check", spec.toByteArray(Charsets.UTF_8))
     override fun apply(spec: String) = call("apply", spec.toByteArray(Charsets.UTF_8))
     override fun putFile(name: String, data: ByteArray) = call("put-file $name", data)
+    override fun listFiles() = call("list-files", null)
+    override fun rmFile(name: String) = call("rm-file $name", null)
     override fun status() = call("status", null)
 }

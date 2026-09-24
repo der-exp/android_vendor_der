@@ -367,6 +367,13 @@ fun testDispatcher() {
         val m = JSONObject(call("settings.get"))
         check("settings.put: подписки не теряются, название обновлено", "Моя", m.getJSONArray("subs").getJSONObject(0).getString("name"))
         expectError("settings.put: негодная модель", "bad-args") { call("settings.put", """{"outputs":[{"name":"","kind":"interface"}]}""") }
+        check("settings.get: обновление по умолчанию — только без лимитной сети", true, m.getJSONObject("update").getBoolean("unmetered_only"))
+        call("settings.put", """{"update":{"unmetered_only":false}}""")
+        check("settings.put частью: настройка обновления", false, d.updateUnmeteredOnly())
+        val mp = JSONObject(call("settings.get"))
+        check("settings.put частью: правила и списки на месте", 4 to "work", mp.getJSONArray("channels").length() to mp.getJSONArray("custom").getJSONObject(0).getString("name"))
+        call("settings.put", """{"update":{"unmetered_only":true}}""")
+        expectError("settings.put: настройка обновления не да/нет", "bad-args") { call("settings.put", """{"update":{"unmetered_only":"да"}}""") }
 
         val pv = JSONObject(call("spec.preview"))
         check("spec.preview: check движка — код 0 (списки ещё не скачаны)", 0, pv.getJSONObject("check").getInt("code"))
@@ -392,6 +399,13 @@ fun testDispatcher() {
         check("spec.apply: каждая спека прошла и сокет, и dry-run одинаково", 0, eng.dryRunMismatch)
         check("spec.apply: отказа ни на одной спеке", true, eng.specs.all { eng.dryRun(it).first == 0 })
 
+        // Ответ list-files: форма ctl.md и терпимые запасные.
+        check("list-files: разбор ответа ctl.md", listOf("a.lst", "b.lst"),
+            Dispatcher.fileNames(CtlReply(0, "", "", null, """{"v":1,"cmd":"list-files","code":0,"files":[{"name":"a.lst","size":1},{"name":"b.lst"}]}""")))
+        check("list-files: разбор строк вывода", listOf("a.lst", "sub-s1-0011aabb.txt"),
+            Dispatcher.fileNames(CtlReply(0, "a.lst\nsub-s1-0011aabb.txt\n", "", null, """{"v":1,"code":0}""")))
+        check("list-files: пустой каталог", emptyList<String>(), Dispatcher.fileNames(CtlReply(0, "", "", null, """{"v":1,"cmd":"list-files","code":0,"files":[]}""")))
+
         // Доменные правила только у раздачи, у приложения — одни подсети: Private DNS не нужен.
         call("settings.put", put.replace("\"who\":{\"kind\":\"phone\"},\"what\":{\"lists\":[\"itdoginfo:youtube\"]}", "\"who\":{\"kind\":\"tether\"},\"what\":{\"lists\":[\"itdoginfo:youtube\"]}")
             .replace("{\"name\":\"MyDyson\",\"who\":{\"kind\":\"phone\"}", "{\"name\":\"MyDyson\",\"who\":{\"kind\":\"tether\"}")
@@ -400,6 +414,15 @@ fun testDispatcher() {
             .replace("\"custom\":[{\"name\":\"work\"", "\"custom\":[{\"name\":\"nets\",\"prefixes\":[\"198.51.100.0/24\"]},{\"name\":\"work\""))
         call("spec.apply")
         check("spec.apply: без доменных каналов телефона Private DNS не нужен", false, d.lastApply?.needsLocalDns)
+        check("уборка: списки ушедшего из правил Telegram убраны у движка", false, File(eng.listsDir, "d-itdoginfo.telegram.lst").exists())
+        check("уборка: используемые списки на месте", true, File(eng.listsDir, "d-itdoginfo.youtube.lst").exists())
+        check("уборка: новый свой список у движка", true, File(eng.listsDir, "up-nets.lst").exists())
+
+        // Движок с put-file, но без list-files/rm-file: применение не страдает, файлы остаются.
+        eng.filesListSupported = false
+        call("settings.put", put)
+        check("движок без list-files: применение проходит", true, JSONObject(call("spec.apply")).getBoolean("saved"))
+        eng.filesListSupported = true
 
         // Отказ движка словами человека: выход без устройства не пройдёт модель, поэтому ломаем
         // спеку тем, что знает только движок, — 65 каналов.
@@ -418,6 +441,26 @@ fun testDispatcher() {
         expectError("lists.custom: удалить используемый", "bad-args", "Работа") { call("lists.custom", """{"remove":"work"}""") }
         check("lists.custom: удалить свободный", true, JSONObject(call("lists.custom", """{"remove":"home"}""")).getBoolean("saved"))
 
+        // Как экран: черновик — снимок settings.get; пока он правится, свой список создаётся из
+        // редактора правила (сохраняется сразу); в settings.put уходят только выходы и правила.
+        val snap = JSONObject(call("settings.get"))
+        call("lists.custom", """{"put":{"name":"fromeditor","text":"example.net\n192.0.2.0/24"}}""")
+        val draftCh = JSONArray().put(JSONObject("""{"name":"Новое правило","enabled":true,"who":{"kind":"apps","uids":[10150,10151]},
+            "what":{"lists":["itdoginfo:telegram"],"custom":["fromeditor"],"all":false},"out":"nl"}"""))
+        val sc = snap.getJSONArray("channels")
+        for (i in 0 until sc.length()) draftCh.put(sc.getJSONObject(i))
+        draftCh.getJSONObject(2).put("enabled", false)
+        call("settings.put", JSONObject().put("outputs", snap.getJSONArray("outputs")).put("channels", draftCh).toString())
+        check("как экран: свой список из редактора не затёрт снимком", true, JSONArray(call("lists.custom")).toString().contains("fromeditor"))
+        val sa = JSONObject(call("spec.apply"))
+        check("как экран: применено", true, sa.getBoolean("saved"))
+        val ss = JSONObject(File(eng.work, "spec.json").readText())
+        check("как экран: новое правило — первым у движка", "Новое правило", channelNames(ss)[0])
+        check("как экран: приложения — from uid", "[\"uid:10150\",\"uid:10151\"]", ss.getJSONArray("channels").getJSONObject(0).getJSONArray("from").toString())
+        check("как экран: выключенное правило выключено у движка", false,
+            (0 until ss.getJSONArray("channels").length()).map { ss.getJSONArray("channels").getJSONObject(it) }.first { it.getString("name") == "Telegram" }.optBoolean("enabled", true))
+        call("settings.put", put)
+
         // Подписки: удалить занятую нельзя, обновить — можно; новое содержимое — новое имя файла.
         expectError("subs.remove: занятая выходом", "bad-args", "nl") { call("subs.remove", """{"id":"s1"}""") }
         call("spec.apply")
@@ -427,6 +470,7 @@ fun testDispatcher() {
         check("subs.refresh: узлов стало два", 2, rf.getJSONObject(0).getInt("nodes"))
         val after = eng.listsDir.list()!!.filter { it.startsWith("sub-s1-") }.toSet()
         check("subs.refresh: применённый выход получил новый файл подписки", true, (after - before).size == 1)
+        check("subs.refresh: прежний файл подписки убран у движка", true, before.isNotEmpty() && before.none { it in after })
         check("subs.refresh: и спека у движка ссылается на него", true,
             JSONObject(File(eng.work, "spec.json").readText()).getJSONObject("outputs").getJSONObject("nl").getString("sub_file").endsWith((after - before).first()))
         expectError("subs.refresh: вставленные ссылки обновить нечем", "bad-args") { call("subs.refresh", """{"id":"s2"}""") }
@@ -481,11 +525,15 @@ fun testUpdate() {
         http.put("https://lists.example/l/nets.lst", "203.0.113.0/24\n198.51.100.0/24\n")
         http.put("https://lists.example/l/mixed.lst", "# name: Смесь\noffice.example\n*.corp.example\n192.0.2.0/24\n192.0.2.77\n")
         val files = tmp("upd-files")
-        val d = Dispatcher(files, eng, http, DeviceInfo(), eng.listsDir.path)
+        // Каталог списков — по умолчанию телефона, а у движка стенда он свой: логика обязана
+        // взять путь из ответа put-file (ctl.md) и собрать спеку с ним.
+        val d = Dispatcher(files, eng, http, DeviceInfo())
         d.call("settings.put", """{"catalog_url":"$catUrl","outputs":[{"name":"vpn","kind":"interface","devices":["wg0"]}],
             "channels":[{"name":"B","who":{"kind":"phone"},"what":{"lists":["big","nets","mixed"]},"out":"vpn"}]}""")
         val ap = JSONObject(d.call("spec.apply", "{}"))
         check("свой каталог: применено", true, ap.getBoolean("saved"))
+        check("каталог движка из ответа put-file — в путях спеки", true,
+            File(eng.work, "spec.json").readText().contains("\"${eng.listsDir.path}/d-big.lst\""))
         check("свой каталог: список у движка", 200, File(eng.listsDir, "d-big.lst").readLines().size)
         check("смешанный список: домены — в доменный файл", "office.example\n*.corp.example\n", File(eng.listsDir, "d-mixed.lst").readText())
         check("смешанный список: адреса — в адресный", "192.0.2.0/24\n192.0.2.77\n", File(eng.listsDir, "m-mixed.lst").readText())

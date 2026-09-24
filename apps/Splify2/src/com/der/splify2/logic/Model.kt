@@ -41,8 +41,12 @@
  *     "custom": [{"name":"work", "domains":["corp.example"], "prefixes":["203.0.113.0/24"]}],
  *     "subs":   [{"id":"s1", "name":"Моя подписка", "url":"https://…", "kind":"url"}],
  *     "tether": {"devices":["rndis0","ncm0","softap0","ap0","swlan0","bt-pan"]},
- *     "catalog_url": null                            // свой каталог; null — каталог по умолчанию
+ *     "catalog_url": null,                           // свой каталог; null — каталог по умолчанию
+ *     "update": {"unmetered_only": true}             // ежесуточное обновление — только без лимитной сети
  *   }
+ *
+ * settings.put принимает и часть модели: поля верхнего уровня, которых нет в запросе, остаются
+ * как были (Dispatcher.settingsPut). Подписки — только своими методами subs.*.
  *
  * Выход `direct` есть всегда и в модели его заводить не нужно (как withDirect в интерфейсе
  * роутера): «напрямую» — законная цель правила, а не настройка, которую можно забыть.
@@ -112,6 +116,10 @@ data class Model(
     val subs: List<Sub> = emptyList(),
     val tetherDevices: List<String> = DEFAULT_TETHER,
     val catalogUrl: String? = null,
+    /** Ежесуточное обновление списков и подписок — только без лимитной сети. По умолчанию да:
+     *  списки каталога весят мегабайты, и тратить на них мобильный трафик без спроса нельзя;
+     *  кому свежесть важнее трафика, выключит сам. Применяет оболочка (UpdateJobService). */
+    val updateUnmeteredOnly: Boolean = true,
 ) {
     fun output(name: String): Output? =
         outputs.firstOrNull { it.name == name } ?: if (name == "direct") Output("direct", OutKind.DIRECT) else null
@@ -137,6 +145,7 @@ data class Model(
         })
         o.put("tether", JSONObject().put("devices", jsonArrayOf(tetherDevices)))
         o.put("catalog_url", catalogUrl ?: JSONObject.NULL)
+        o.put("update", JSONObject().put("unmetered_only", updateUnmeteredOnly))
         return o
     }
 
@@ -206,7 +215,11 @@ data class Model(
             if (cu != null && !cu.startsWith("https://") && !cu.startsWith("http://"))
                 bad("Адрес каталога списков должен начинаться с https://")
 
-            return Model(version, outputs, channels, lists.toList(), custom, subs, tether, cu)
+            val uv: Any? = o.optJSONObject("update")?.opt("unmetered_only")
+            val unmetered = if (uv == null || uv == JSONObject.NULL) true
+                else uv as? Boolean ?: bad("Настройка обновления записана неверно")
+
+            return Model(version, outputs, channels, lists.toList(), custom, subs, tether, cu, unmetered)
         }
 
         private fun parseSubs(a: JSONArray?): List<Sub> {
@@ -317,10 +330,13 @@ data class Model(
                 if (name.any { it == '"' || it == '\\' || it < ' ' || it == '\u007f' })
                     bad("Правило «$name»: в имени нельзя кавычки и обратную косую черту")
                 if (out.any { it.name == name }) bad("Правило «$name» записано дважды — переименуйте одно")
-                val enabled = when (val e = c.opt("enabled")) {
-                    null, JSONObject.NULL -> true
-                    is Boolean -> e
-                    is Number -> e.toInt() != 0
+                // Условиями, а не `when (val e = …)`: над Any? из android.jar kotlinc 2.x считает
+                // такой when неисчерпывающим даже с else, а сборка прошивки идёт без предупреждений.
+                val e: Any? = c.opt("enabled")
+                val enabled = when {
+                    e == null || e == JSONObject.NULL -> true
+                    e is Boolean -> e
+                    e is Number -> e.toInt() != 0
                     else -> bad("Правило «$name»: «включено» — да или нет")
                 }
                 val who = parseWho(c.optJSONObject("who"), name)

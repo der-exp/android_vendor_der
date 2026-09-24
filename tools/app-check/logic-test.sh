@@ -11,6 +11,11 @@
 #   4. компилирует логику без Background.kt (ему нужен Android) вместе со стендом и гоняет его
 #      на JVM против настоящего движка (ctl-serve + apply --dry-run).
 #
+# Файловые команды сокета (put-file, list-files, rm-file) по умолчанию тоже настоящие:
+# ctl-serve стенда запускается с --lists-dir своего каталога, и логика заливает и убирает файлы
+# через тот же протокол, что на телефоне, — это и есть сквозная проверка без телефона.
+# STEER_REAL_FILES=0 — для дерева steer старше этих команд: стенд делает их сам (HostEngine).
+#
 # Пути — переменными с умолчаниями этой машины: STEER_DIR (дерево steer), LISTS_DIR
 # (splify2-lists), KOTLINC, ANDROID_JAR, JSON_JAR, OUT.
 set -eu
@@ -49,6 +54,6 @@ JVM_SRC="$(ls "$LOGIC"/*.kt | grep -v '/Background.kt$')"
 WORK="$(mktemp -d /tmp/logic-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 echo "logic-test: прогон"
-STEER="$OUT/steer-android-ext" STEER_SRC="$STEER_DIR" LISTS_JSON="$LISTS_DIR/lists.json" \
+STEER_REAL_FILES="${STEER_REAL_FILES:-1}" STEER="$OUT/steer-android-ext" STEER_SRC="$STEER_DIR" LISTS_JSON="$LISTS_DIR/lists.json" \
 SUBCOUNT="$OUT/subcount" WORK="$WORK" \
     java -cp "$OUT/logic-test.jar:$JSON_JAR" LogicTestKt

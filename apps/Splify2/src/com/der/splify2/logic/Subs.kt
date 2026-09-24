@@ -280,11 +280,9 @@ internal object SubParse {
                 val vnext = ob.optJSONObject("settings")?.optJSONArray("vnext")?.optJSONObject(0)
                 if (vnext != null) {
                     n.host = vnext.str("address") ?: ""
-                    n.port = when (val pv = vnext.opt("port")) {
-                        is Number -> pv.toInt()
-                        is String -> pv.toIntOrNull() ?: 0
-                        else -> 0
-                    }.let { if (it in 1..65535) it else 0 }
+                    val pv: Any? = vnext.opt("port")
+                    n.port = (if (pv is Number) pv.toInt() else if (pv is String) pv.toIntOrNull() ?: 0 else 0)
+                        .let { if (it in 1..65535) it else 0 }
                     n.uuid = vnext.optJSONArray("users")?.optJSONObject(0)?.str("id") ?: ""
                 }
                 val ss = ob.optJSONObject("streamSettings")

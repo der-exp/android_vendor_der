@@ -4,7 +4,8 @@
  * Роль — та же, что у объекта rpcd `splify2` на роутере: экран зовёт метод по имени с JSON и
  * получает JSON. Отличия — от платформы:
  *   - движок — не программа, а управляющий сокет (Engine): спека уходит телом команды, файлы
- *     списков — командой put-file (SpecPusher ниже);
+ *     списков — командой put-file (push ниже), а ненужные после применения убираются командами
+ *     list-files и rm-file (sweep ниже);
  *   - источник правды — модель (Model.kt), спека из неё собирается (SpecBuilder.kt);
  *   - сеть — у приложения (Http), и скачивание подписок и списков делается здесь, а не движком.
  *
@@ -46,7 +47,16 @@ class Dispatcher(
     private val fetcher = Fetcher(http)
     private val lists = ListStore(dir, fetcher)
     private val subs = SubStore(dir, http, device)
-    private val builder = SpecBuilder(engineListsDir)
+    private val dirFile = File(dir, "lists/engine-dir.json")
+
+    /** Каталог списков у движка — то, что пишется в спеку путями файлов. Сначала — данный
+     *  оболочкой (/data/misc/steer/lists), потом — тот, что назвал сам движок в ответе put-file
+     *  (`path`): по ctl.md в спеку пишется именно он, а каталог сервера задаётся его флагом
+     *  (--lists-dir) и может отличаться от ожидаемого. Запоминается в файле, чтобы следующая
+     *  сборка сразу шла с верными путями. */
+    @Volatile
+    private var engineDir: String = Files.readJson(dirFile)?.str("dir")?.takeIf { dirOk(it) } ?: engineListsDir
+    private val builder: SpecBuilder get() = SpecBuilder(engineDir)
     private val modelLock = Any()
     private val engineLock = Any()
     private val updating = AtomicBoolean(false)
@@ -71,6 +81,8 @@ class Dispatcher(
         override fun check(spec: String) = g { e.check(spec) }
         override fun apply(spec: String) = g { e.apply(spec) }
         override fun putFile(name: String, data: ByteArray) = g { e.putFile(name, data) }
+        override fun listFiles() = g { e.listFiles() }
+        override fun rmFile(name: String) = g { e.rmFile(name) }
         override fun status() = g { e.status() }
     }
 
@@ -127,8 +139,18 @@ class Dispatcher(
 
     private fun saveModel(m: Model) = Files.writeText(modelFile, m.toJson().toString())
 
+    /** Настройка ежесуточного обновления — для оболочки (UpdateJobService.schedule). */
+    fun updateUnmeteredOnly(): Boolean = loadModel().updateUnmeteredOnly
+
     private fun settingsPut(a: JSONObject): JSONObject = synchronized(modelLock) {
         val cur = loadModel()
+        // Часть модели законна: поля верхнего уровня, которых нет в запросе, берутся из
+        // сохранённой. ПОЧЕМУ: экран держит правила и выходы черновиком до «Применить», а свои
+        // списки, выбор каталога и настройку обновления сохраняет сразу, своими методами. Модель
+        // целиком из черновика затёрла бы то, что человек сохранил после его снимка, — свой
+        // список, созданный из редактора правила, пропал бы при первом же применении.
+        val merged = cur.toJson()
+        for (k in a.keys()) if (k != "subs") merged.put(k, a.get(k))
         // Подписки меняются только своими методами (subs.add/remove): за подпиской стоит файл
         // узлов, и модель без него — выход, который не соберётся. Из присланного берём только
         // новые названия уже известных подписок.
@@ -138,8 +160,8 @@ class Dispatcher(
         }
         val subsJson = JSONArray()
         for (s in cur.subs) subsJson.put(JSONObject().put("id", s.id).put("name", names[s.id] ?: s.name).put("kind", s.kind).also { o -> s.url?.let { o.put("url", it) } })
-        a.put("subs", subsJson)
-        val m = Model.parse(a)
+        merged.put("subs", subsJson)
+        val m = Model.parse(merged)
         if (m.catalogUrl != cur.catalogUrl) lists.dropCatalog()
         saveModel(m)
         JSONObject().put("saved", true)
@@ -182,12 +204,62 @@ class Dispatcher(
             when {
                 r.error == "unknown-command" -> throw BridgeError("engine",
                     "Эта версия системы не принимает списки и подписки от приложения — правила с ними пока не применить. Обновите систему")
+                r.error == "too-large" -> throw BridgeError("engine", "Списков набралось больше, чем помещается у движка, — уберите часть из правил")
                 r.error != null -> throw engineError(r, "Движок не принял файл списка")
                 r.code != null && r.code != 0 -> throw BridgeError("engine", "Движок не принял файл списка: ${humanize(r.stderr)}")
             }
+            learnDir(r)
             pushed.put(name, sha)
         }
         Files.writeText(pushedFile, pushed.toString())
+    }
+
+    private fun dirOk(d: String) = d.startsWith("/") && d.length in 2..200 && d.split('/').none { it == ".." || it == "." }
+
+    private fun learnDir(r: CtlReply) {
+        val path = try { JSONObject(r.raw).str("path") } catch (e: Exception) { null } ?: return
+        val d = path.substringBeforeLast('/', "")
+        if (!dirOk(d) || d == engineDir) return
+        engineDir = d
+        Files.writeText(dirFile, JSONObject().put("dir", d).toString())
+    }
+
+    /** Залить файлы собранной спеки и вернуть спеку, которую отдавать apply: если движок в
+     *  ответе put-file назвал другой каталог, пути в спеке пересобираются под него (файлы те же,
+     *  имена те же — заливать заново нечего). */
+    private fun pushBuilt(built: BuiltSpec, m: Model, cat: Catalog?, all: Boolean): BuiltSpec {
+        val before = engineDir
+        push(built.files, all)
+        return if (engineDir == before) built else builder.build(m, Src(cat))
+    }
+
+    /** Убрать из каталога движка наши файлы, на которые сохранённая спека больше не ссылается:
+     *  старые версии подписок (имя с хешем меняется при каждом обновлении), списки из правил,
+     *  которых уже нет, свои списки после удаления.
+     *
+     *  Только ПОСЛЕ того, как движок сохранил новую спеку: файл, на который ссылается
+     *  сохранённая, движок удалить не даст (`in-use`), а до apply ссылается ещё прежняя. Трогаем
+     *  только имена, которые пишет эта логика (OWN_FILE), — каталог общий, и чужой файл в нём не
+     *  наш, чтобы его убирать. Любой отказ — не ошибка применения: правила уже стоят, а лишний
+     *  файл никому не мешает, кроме места; движок старше list-files/rm-file (`unknown-command`)
+     *  просто оставляет всё как есть. */
+    private fun sweep(keep: Set<String>) {
+        try {
+            val r = engine.listFiles()
+            if (r.error != null || (r.code != null && r.code != 0)) return
+            val names = fileNames(r)
+            val pushed = Files.readJson(pushedFile) ?: JSONObject()
+            var dirty = false
+            for (n in names) {
+                if (n in keep || !OWN_FILE.matches(n)) continue
+                val x = engine.rmFile(n)
+                if (x.error == "unknown-command") return
+                if (x.error != null || (x.code != null && x.code != 0)) continue   // in-use и прочее — в другой раз
+                if (pushed.has(n)) { pushed.remove(n); dirty = true }
+            }
+            if (dirty) Files.writeText(pushedFile, pushed.toString())
+        } catch (e: Exception) {
+        }
     }
 
     private fun engineError(r: CtlReply, what: String): BridgeError {
@@ -259,8 +331,7 @@ class Dispatcher(
         val chk = engine.check(built.text)
         if (chk.error != null) throw engineError(chk, "Проверка настройки не выполнена")
         if (chk.code != 0) throw BridgeError("engine", "Движок не принял настройку: ${humanize(chk.stderr)}")
-        push(built.files, pushAll)
-        val out = applyBuilt(built, m)
+        val out = applyBuilt(pushBuilt(built, m, cat, pushAll), m)
         out.put("warnings", jsonArrayOf(warnings))
     }
 
@@ -286,6 +357,7 @@ class Dispatcher(
         if (saved) {
             Files.writeText(appliedFile, JSONObject().put("model", m.toJson()).put("needs_local_dns", built.needsLocalDns)
                 .put("applied", applied).put("at", nowSec()).toString())
+            sweep(built.files)
         }
         val prevDns = lastApply?.needsLocalDns ?: false
         lastApply = ApplyResult(applied, saved, if (saved) built.needsLocalDns else prevDns, message)
@@ -304,19 +376,18 @@ class Dispatcher(
      *  null, если применять нечего, иначе текст-отчёт. */
     internal fun reapply(changed: Collection<String>): String? = synchronized(engineLock) {
         val m = appliedModel() ?: return null
-        val built = builder.build(m, Src(lists.cachedCatalog()))
+        val cat = lists.cachedCatalog()
+        val built = builder.build(m, Src(cat))
         if (changed.none { it in built.files }) return null
-        push(built.files, false)
-        val res = applyBuilt(built, m)
+        val res = applyBuilt(pushBuilt(built, m, cat, false), m)
         if (res.optBoolean("saved") || res.optBoolean("applied")) {
             lists.dropPrev(changed)
             return null
         }
         // Движок отверг обновлённые списки — вернуть прежние и применить снова, как роутер.
         lists.rollback(changed)
-        val again = builder.build(m, Src(lists.cachedCatalog()))
-        push(again.files, false)
-        val res2 = applyBuilt(again, m)
+        val again = builder.build(m, Src(cat))
+        val res2 = applyBuilt(pushBuilt(again, m, cat, false), m)
         return if (res2.optBoolean("saved")) "движок отверг обновлённые списки — работают прежние"
         else "движок отверг и прежние списки — откройте правила и примените их заново"
     }
@@ -582,9 +653,8 @@ class Dispatcher(
             if (am != null && am.outputs.any { it.sub in changed }) {
                 try {
                     synchronized(engineLock) {
-                        val built = builder.build(am, Src(lists.cachedCatalog()))
-                        push(built.files, false)
-                        applyBuilt(built, am)
+                        val cat = lists.cachedCatalog()
+                        applyBuilt(pushBuilt(builder.build(am, Src(cat)), am, cat, false), am)
                     }
                 } catch (e: BridgeError) {
                     errors.add(e.message ?: "")
@@ -594,6 +664,27 @@ class Dispatcher(
         if (emit) onEvent?.invoke("subs.updated", subsList().toString())
         if (only != null && errors.isNotEmpty()) throw BridgeError("network", errors.first().substringAfter(": "))
         return errors
+    }
+
+    companion object {
+        /** Имена файлов, которые логика кладёт в каталог движка: службы каталога (d-, p-, m-),
+         *  свои списки (ud-, up-) — Names.flat; подписки — SubStore.engineName. */
+        private val OWN_FILE = Regex("^(d|p|m|ud|up)-[A-Za-z0-9_.-]+\\.lst$|^sub-[a-z0-9]+-[0-9a-f]{8}\\.txt$")
+
+        /** Имена из ответа list-files. Разбор терпимый: по ctl.md список лежит в самом ответе
+         *  (`"files":[{"name":…}]`), но сервер, отдающий его выводом подкоманды, положил бы тот
+         *  же JSON в stdout, а совсем простой — строки имён; всё это одно и то же. */
+        internal fun fileNames(r: CtlReply): List<String> {
+            fun from(a: JSONArray?): List<String>? = a?.let { arr ->
+                (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.str("name") ?: arr.opt(i) as? String }
+            }
+            val raw = try { JSONObject(r.raw) } catch (e: Exception) { null }
+            from(raw?.optJSONArray("files"))?.let { return it }
+            val out = r.stdout.trim()
+            if (out.startsWith("{")) try { from(JSONObject(out).optJSONArray("files"))?.let { return it } } catch (e: Exception) { }
+            if (out.startsWith("[")) try { from(JSONArray(out))?.let { return it } } catch (e: Exception) { }
+            return out.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("{") }
+        }
     }
 
     // ---- backup ---------------------------------------------------------------------------

@@ -8,10 +8,17 @@
  * спека проходит два пути движка: команду `check` сокета (тот же протокол, что на телефоне) и
  * `steer apply --dry-run` из командной строки, и коды обязаны совпасть.
  *
- * `put-file` у движка ещё нет. Стенд умеет оба режима: `putFileSupported = true` — файл кладётся
- * в каталог списков стенда (так, как это будет делать команда), и dry-run читает настоящие
- * списки; `false` — запрос уходит в настоящий сокет, и сервер отвечает `unknown-command`, как
- * ответит сегодняшний движок на телефоне.
+ * Файловые команды сокета (`put-file`, `list-files`, `rm-file`) есть не у каждого движка. Стенд
+ * умеет три режима:
+ *   - `putFileSupported = true` — стенд делает их сам над каталогом списков стенда так, как их
+ *     описывает steer/docs/ctl.md (включая отказ `in-use` у rm-file файла из сохранённой
+ *     спеки), и dry-run читает настоящие списки; `filesListSupported = false` — из трёх есть
+ *     только put-file, как у движка первой волны;
+ *   - `putFileSupported = false` — движок до файловых команд: отказ `unknown-command`, как у
+ *     сервера, который такой команды не знает;
+ *   - STEER_REAL_FILES=1 — все три идут в настоящий сокет: движок с файловыми командами,
+ *     ctl-serve запущен с `--lists-dir` каталога стенда. Это сквозная проверка без телефона:
+ *     логика, протокол и компилятор спеки — все настоящие.
  */
 import com.der.splify2.logic.CtlReply
 import com.der.splify2.logic.Engine
@@ -31,6 +38,8 @@ class HostEngine(
     val work: File,
     var putFileSupported: Boolean = true,
 ) : Engine {
+    val realFiles = System.getenv("STEER_REAL_FILES") == "1"
+    var filesListSupported = true
     val listsDir = File(work, "lists").also { it.mkdirs() }
     private val sock = File(work, "s.sock")
     private val specFile = File(work, "spec.json")
@@ -41,8 +50,9 @@ class HostEngine(
 
     fun start() {
         sock.delete()
-        val pb = ProcessBuilder(steer, "ctl-serve", "--socket", sock.path, "--spec", specFile.path,
-            "--state-dir", state.path)
+        val args = mutableListOf(steer, "ctl-serve", "--socket", sock.path, "--spec", specFile.path, "--state-dir", state.path)
+        if (realFiles) args += listOf("--lists-dir", listsDir.path)
+        val pb = ProcessBuilder(args)
         // Движок «выключен»: apply только сохраняет спеку и не трогает ядро машины стенда (ctl.c,
         // ctl_enabled). Проверка dry-run при этом та же, что при включённом.
         pb.environment()["STEER_CTL_ENABLED"] = "0"
@@ -104,9 +114,40 @@ class HostEngine(
     override fun apply(spec: String) = both("apply", spec)
     override fun status() = raw("status", null)
     override fun putFile(name: String, data: ByteArray): CtlReply {
-        if (!putFileSupported) return raw("put-file $name", data)
+        if (!putFileSupported) return unknown()
+        if (realFiles) return raw("put-file $name", data)
         File(listsDir, name).writeBytes(data)
-        return CtlReply(0, "", "", null, "{\"v\":1,\"cmd\":\"put-file\",\"code\":0}")
+        return CtlReply(0, "", "", null, JSONObject().put("v", 1).put("cmd", "put-file").put("code", 0).put("name", name)
+            .put("size", data.size).put("path", "${listsDir.path}/$name").toString())
+    }
+
+    private fun unknown() = CtlReply(null, "", "", "unknown-command", "{\"v\":1,\"error\":\"unknown-command\",\"message\":\"нет такой команды\"}")
+
+    override fun listFiles(): CtlReply {
+        if (!putFileSupported) return unknown()
+        if (realFiles) return raw("list-files", null)
+        if (!filesListSupported) return unknown()
+        val files = org.json.JSONArray()
+        listsDir.listFiles()?.sortedBy { it.name }?.forEach {
+            files.put(JSONObject().put("name", it.name).put("size", it.length()).put("mtime", it.lastModified() / 1000))
+        }
+        return CtlReply(0, "", "", null, JSONObject().put("v", 1).put("cmd", "list-files").put("code", 0)
+            .put("dir", listsDir.path).put("files", files).toString())
+    }
+
+    val removed = ArrayList<String>()
+
+    override fun rmFile(name: String): CtlReply {
+        if (!putFileSupported) return unknown()
+        if (realFiles) return raw("rm-file $name", null).also { if (it.error == null) removed.add(name) }
+        if (!filesListSupported) return unknown()
+        // Как сервер: файл, путь которого есть в сохранённой спеке, не удаляется.
+        if (specFile.isFile && specFile.readText().contains(JSONObject.quote("${listsDir.path}/$name").replace("\\/", "/")))
+            return CtlReply(null, "", "", "in-use", "{\"v\":1,\"cmd\":\"rm-file\",\"error\":\"in-use\"}")
+        val f = File(listsDir, name)
+        val was = f.delete()
+        removed.add(name)
+        return CtlReply(0, "", "", null, "{\"v\":1,\"cmd\":\"rm-file\",\"code\":0,\"name\":\"$name\",\"removed\":$was}")
     }
 }
 
