@@ -126,6 +126,13 @@ type_transition steerd steerd_data_file:sock_file steerd_socket "steer.sock";
 # запущенный в этом домене.
 allow steerd steerd_socket:sock_file { create setattr unlink getattr write };
 
+# Сокет журнала резолвера (<каталог состояния>/dnsd.sock, права 0600): его создаёт steer-dnsd,
+# а подключается к нему сервер управляющего сокета, отвечая приложению на dns-log (docs/ctl.md
+# дерева steer). Оба — домен steerd, и файл сокета получает тип каталога, steerd_data_file.
+# Перехода в свой тип, как у steer.sock, ему не нужно нарочно: приложению он не должен быть
+# виден вовсе, и запрет ниже (neverallow … steerd_data_file) это держит. write — для connect.
+allow steerd steerd_data_file:sock_file { create unlink getattr write };
+
 # Сервер сокета (steer ctl-serve) и сам сокет: слушать и принимать (listen, accept) и узнать
 # собеседника (getopt: SO_PEERCRED, SO_PEERSEC) — это всё права на СВОЙ сокет, их даёт
 # domain.te всем доменам (self:unix_stream_socket create_stream_socket_perms). reload находит
