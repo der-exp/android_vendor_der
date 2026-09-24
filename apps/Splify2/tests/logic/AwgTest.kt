@@ -450,6 +450,54 @@ fun testAwgDispatcher() {
     }
 }
 
+/** Движок «до via» поверх настоящего: status без умения via (или вовсе без ответа), а на вопрос
+ *  компилятору (Dispatcher.VIA_PROBE) — «принято», как ответил бы движок, не знающий поля. */
+class OldEngine(private val e: HostEngine, private val statusDown: Boolean) : Engine by e {
+    override fun status(): CtlReply {
+        if (statusDown) return CtlReply(2, "", "steer: spec.json: cannot open\n", null, "{}")
+        val r = e.status()
+        val o = JSONObject(r.stdout.trim())
+        val f = o.optJSONArray("features") ?: JSONArray()
+        o.put("features", JSONArray((0 until f.length()).map { f.getString(it) }.filter { it != "via" }))
+        return r.copy(stdout = o.toString())
+    }
+    override fun check(spec: String): CtlReply =
+        if (spec.contains("via-probe")) CtlReply(0, "", "", null, "{\"code\":0}") else e.check(spec)
+}
+
+/** Умение via: движок с ним — применяется и до первой сохранённой спеки (вопрос компилятору);
+ *  движок без него — отказ до применения, словами человека. */
+fun testViaCapability() {
+    val eng = HostEngine(STEER, tmp("via-cap-engine"))
+    eng.start()
+    try {
+        if ("via" !in features(eng)) { pending.add("умение via: движок стенда без via"); return }
+        fun setup(d: Dispatcher) {
+            d.call("subs.add", """{"url":"vless://$UUID@1.2.3.4:443?security=reality&pbk=K&sni=x.com#One"}""")
+            val id = JSONObject(d.call("outputs.importAwg", JSONObject().put("text", AWG_FULL).toString())).getString("conf")
+            d.call("settings.put", """{"outputs":[{"name":"nl","kind":"vless","sub":"s1"},{"name":"fi","kind":"awg","conf":"$id","via":"nl"}],
+                "channels":[{"name":"Всё","who":{"kind":"phone"},"what":{"all":true},"out":"fi"}]}""")
+        }
+        // Спеки у движка ещё нет — status молчит, и умение узнаётся вопросом компилятору.
+        val d = Dispatcher(tmp("via-cap-files"), eng, FakeHttp(), DeviceInfo(), eng.listsDir.path)
+        setup(d)
+        check("умение via: до первой спеки — вопрос компилятору, применено", true, JSONObject(d.call("spec.apply", "{}")).getBoolean("saved"))
+        check("умение via: у движка в спеке", "nl", JSONObject(File(eng.work, "spec.json").readText()).getJSONObject("outputs").getJSONObject("fi").getString("via"))
+
+        for ((what, down) in listOf("status без via" to false, "status молчит, компилятор поле пропустил" to true)) {
+            val old = Dispatcher(tmp("via-old-files"), OldEngine(eng, down), FakeHttp(), DeviceInfo(), eng.listsDir.path)
+            setup(old)
+            val before = realSpecs(eng).size
+            expectError("умение via: движок без via ($what) — отказ", "engine", "обновите систему") { old.call("spec.apply", "{}") }
+            check("умение via: движку без via ($what) спека не ушла", before, realSpecs(eng).size)
+            check("умение via: spec.preview предупреждает ($what)", true,
+                JSONObject(old.call("spec.preview", "{}")).getJSONArray("warnings").toString().contains("через другой выход"))
+        }
+    } finally {
+        eng.stop()
+    }
+}
+
 fun testAwg() {
     val eng = HostEngine(STEER, tmp("awg-spec-engine"))
     eng.start()
@@ -464,4 +512,5 @@ fun testAwg() {
         eng.stop()
     }
     testAwgDispatcher()
+    testViaCapability()
 }
