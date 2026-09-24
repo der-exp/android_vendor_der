@@ -17,7 +17,7 @@ type steerd_data_file, file_type, data_file_type, core_data_file_type;
 # ровно одному домену (splify2_app) и запрещён всем прочим. Через TCP на 127.0.0.1 канал НЕ
 # идёт осознанно: локальный порт видит любое приложение, а сокет с меткой — только тот, кому
 # SELinux это позволил.
-type steerd_socket, file_type, data_file_type, core_data_file_type;
+type steerd_socket, file_type, data_file_type, core_data_file_type, mlstrustedobject;
 
 # Свойство-выключатель persist.der.steer.enabled. Отдельный тип, чтобы писать его могли
 # только платформенные домены (init, splify2), а не любое приложение.

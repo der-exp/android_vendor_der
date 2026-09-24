@@ -42,6 +42,23 @@ allow steerd self:netlink_route_socket { create bind write read setopt getopt nl
 allow steerd self:{ udp_socket tcp_socket } { create bind connect read write setopt getopt getattr shutdown };
 allow steerd self:tun_socket { create };
 allow steerd tun_device:chr_file rw_file_perms;
+# ioctl на /dev/tun платформа сужает списком (domain.te: allowxperm … { FIOCLEX FIONCLEX }), и
+# без своего списка создать устройство нельзя. Ровно то, что зовёт src/ext/tun.c: TUNSETIFF
+# (создать/открыть устройство), TUNSETOFFLOAD (GRO у xsteer), и TUNGETIFF, как у netd.
+allowxperm steerd tun_device:chr_file ioctl { TUNSETIFF TUNSETOFFLOAD TUNGETIFF };
+
+# Сторож читает состояние устройств выходов: /sys/class/net/<dev>/operstate, carrier, mtu.
+# Без этого права каждый выход выглядел бы отсутствующим — и упавшим (blackhole при
+# on_fail=drop, напрямую при остальных).
+r_dir_file(steerd, sysfs_net)
+
+# Проба сторожа — ping через устройство выхода (/system/bin/ping), и masquerade у выходов-
+# интерфейсов — правилом iptables (см. android_masq_sync в steer.c: на ядре 4.9 nat nft и nat
+# iptables netd на одном хуке не уживаются). iptables говорит с ядром через сырой сокет и
+# берёт блокировку /system/etc/xtables.lock, как netd.
+allow steerd self:rawip_socket { create getopt setopt read write };
+allow steerd self:icmp_socket { create getopt setopt read write connect };
+allow steerd system_file:file lock;
 
 # nft вызывается движком как внешняя команда. Бинарник nft помечен steerd_exec (см.
 # file_contexts) и исполняется В ТОМ ЖЕ домене steerd (execute_no_trans): отдельный домен для
@@ -58,6 +75,15 @@ allow steerd system_file:file execute_no_trans;
 # своего состояния, потому что certverify читает хранилище одним файлом. Читать сами файлы
 # платформа разрешает любому домену (domain.te); листать каталог — нет, это право здесь.
 allow steerd system_security_cacerts_file:dir r_dir_perms;
+
+# Уровень MLS. Приложение splify2 живёт на уровне своего пользователя и приложения
+# (levelFrom=all в seapp_contexts), демон — на s0; ограничения MLS на connectto и запись в
+# сокет (private/mls) без доверенного субъекта или объекта с одной стороны закрыли бы канал.
+typeattribute steerd mlstrustedsubject;
+
+# Журнал: stdout и stderr сервисов init отдаёт в /dev/null, а у сервисов steerd стоит
+# stdio_to_kmsg — строки steer[warn]/steer[info] видны в dmesg.
+allow steerd kmsg_device:chr_file { write open getattr };
 
 # Данные движка: спека, списки, снимок, сокет, времянки. Полный доступ в своём каталоге.
 allow steerd steerd_data_file:dir  create_dir_perms;

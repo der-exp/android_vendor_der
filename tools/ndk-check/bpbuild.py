@@ -23,7 +23,7 @@ there so that code which only builds because a warning is not an error on the
 host fails here too; they are not guaranteed to be a byte-for-byte copy.
 
 Usage:
-  bpbuild.py --out DIR [--api 34] [--static] [--werror] [--std gnu17]
+  bpbuild.py --out DIR [--api 34] [--static] [--no-werror] [--std gnu23]
              [--external DIR ...] DIR... -- TARGET...
 Each DIR is a directory with an Android.bp; TARGET is a module name to build.
 """
@@ -199,11 +199,17 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--ndk", default=os.environ.get("ANDROID_NDK", "/root/android-ndk"))
     ap.add_argument("--api", default="34")
-    ap.add_argument("--std", default="gnu17", help="Soong's default C standard")
+    ap.add_argument("--std", default="gnu23",
+                    help="Soong's default C standard (build/soong/cc/config/global.go)")
     ap.add_argument("--static", action="store_true",
                     help="link binaries -static (for qemu-user without linker64)")
-    ap.add_argument("--werror", action="store_true",
-                    help="make every warning an error (stricter than Soong)")
+    # Soong adds -Werror to every module outside its warning allowlist (cc/compiler.go), and
+    # external/steer, external/der-mbedtls and external/nftables are not on it. The check is
+    # only worth something if it fails where the real build fails, so -Werror is the default.
+    ap.add_argument("--werror", action="store_true", default=True,
+                    help="make every warning an error, as Soong does (default)")
+    ap.add_argument("--no-werror", dest="werror", action="store_false",
+                    help="report warnings without failing")
     ap.add_argument("--external", action="append", default=[],
                     help="treat this dir as external/ (adds ExternalCflags)")
     ap.add_argument("-j", type=int, default=os.cpu_count())
