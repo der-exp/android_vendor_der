@@ -12,8 +12,9 @@
 #
 # Чего это НЕ повторяет: политику производителя устройства (device/qcom, sdm845-common) —
 # её нет без полного дерева; treble_sepolicy_tests (сравнение с прошлыми версиями API);
-# компиляцию file_contexts/property_contexts/seapp_contexts инструментами платформы (здесь
-# они проверяются checkfc-подобной проверкой меток — метка должна быть типом из политики).
+# компиляцию file_contexts/property_contexts инструментами платформы (здесь они проверяются
+# checkfc-подобной проверкой меток — метка должна быть типом из политики; seapp_contexts
+# проверяет настоящий check_seapp).
 #
 # Почему свои checkpolicy/secilc, а не пакеты Ubuntu: в политике Android 16 есть то, чего не
 # знает checkpolicy 3.5 из Ubuntu 24.04 — первым отказом идёт «policycap functionfs_seclabel»,
@@ -153,6 +154,15 @@ sepolwrap() {
 		"$SELINUX/libsepol/src/libsepol.a" >&2 && echo "$so"
 }
 
+# check_seapp — проверка seapp_contexts платформы. Нужен pcre2 (libpcre2-dev).
+checkseapp() {
+	bin=$OUT/check_seapp
+	[ -x "$bin" ] && { echo "$bin"; return 0; }
+	gcc -O2 -DLINK_SEPOL_STATIC -DPCRE2_CODE_UNIT_WIDTH=8 -o "$bin" \
+		"$SEPOLICY/tools/check_seapp.c" -I"$SELINUX/libsepol/include" \
+		"$SELINUX/libsepol/src/libsepol.a" -lpcre2-8 >&2 && echo "$bin"
+}
+
 # file_contexts в сборке тоже проходят m4 (selinux_contexts.go) — в них бывают макросы
 # флагов. Флаги и уровень API те же, что у policy.conf.
 fcm4() {
@@ -197,7 +207,24 @@ for variant in ${*:-user userdebug}; do
 		rc=1
 	fi
 
-	# 4. Тесты платформы над готовой политикой (sepolicy_tests.py: типы файлов /data и
+	# 4. seapp_contexts: checkseapp платформы (system/sepolicy/tools/check_seapp.c) над
+	#    платформенным файлом (в нём neverallow для привязок приложений), Lineage и нашим —
+	#    со сверкой доменов и типов по готовой политике, как это делает сборка.
+	cs=$(checkseapp) || { echo "FAIL check_seapp не собрался"; rc=1; continue; }
+	sa=""
+	for f in "$SEPOLICY/private/seapp_contexts" "$LINEAGE/common/private/seapp_contexts" \
+	         "$DER/sepolicy/private/seapp_contexts"; do
+		[ -f "$f" ] && sa="$sa $f"
+	done
+	# shellcheck disable=SC2086
+	if [ -f "$d/neverallows.bin" ] && "$cs" -p "$d/neverallows.bin" -o "$d/seapp_contexts" $sa > "$d/seapp.log" 2>&1; then
+		echo "ok   seapp_contexts (check_seapp)"
+	else
+		echo "FAIL seapp_contexts — $d/seapp.log:"; tail -10 "$d/seapp.log"
+		rc=1
+	fi
+
+	# 5. Тесты платформы над готовой политикой (sepolicy_tests.py: типы файлов /data и
 	#    /system с нужными атрибутами, coredomain, свойства). Это те же проверки, что
 	#    запускает сборка модулем sepolicy_tests, но над политикой без вендора устройства.
 	so=$(sepolwrap) || { echo "FAIL libsepolwrap не собралась"; rc=1; continue; }
