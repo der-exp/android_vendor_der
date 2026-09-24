@@ -7,7 +7,8 @@
 //
 // Условия задания:
 //   - период сутки, окно 6 часов — система может сдвинуть запуск в удобный момент;
-//   - нужна сеть; «не на лимитной сети» — по настройке (schedule(unmeteredOnly));
+//   - нужна сеть; «не на лимитной сети» — по настройке модели (update.unmetered_only, по
+//     умолчанию да), которую Shell передаёт в schedule(unmeteredOnly) после каждого её сохранения;
 //   - батарея не на исходе;
 //   - переживает перезагрузку (setPersisted — отсюда RECEIVE_BOOT_COMPLETED в манифесте, своего
 //     получателя загрузки у приложения нет).
@@ -70,8 +71,12 @@ class UpdateJobService : JobService() {
          * запуске процесса — это дёшево: JobScheduler отвечает из памяти.
          */
         fun ensureScheduled(ctx: Context) {
+            // Умолчание — как у модели (Model.updateUnmeteredOnly): только без лимитной сети.
+            // Сама настройка живёт в модели логики; здесь — её копия, чтобы не читать файлы
+            // логики на главном потоке при запуске процесса (её обновляет Shell после
+            // settings.put и backup.import).
             val unmetered = ctx.getSharedPreferences("shell", Context.MODE_PRIVATE)
-                .getBoolean(PREF_UNMETERED, false)
+                .getBoolean(PREF_UNMETERED, true)
             schedule(ctx, unmetered, force = false)
         }
 

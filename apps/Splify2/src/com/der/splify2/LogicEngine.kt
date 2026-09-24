@@ -23,12 +23,16 @@ class LogicEngine(private val client: EngineClient) : Engine {
     override fun status(): CtlReply = wrap { client.status() }
 
     /**
-     * Команды put-file у сервера ещё нет: он отвечает unknown-command, и этот ответ уходит
-     * логике как есть (CtlReply с error). Логика превращает его в отказ engine со своей фразой
-     * (Dispatcher.push) — так spec.apply со списками честно не проходит, а не собирает спеку со
-     * ссылкой на несуществующий файл. Слова отказа — одни, у логики, а не два разных текста.
+     * Файловые команды. Отказ сервера (unknown-command у старого движка, in-use у rm-file
+     * файла из сохранённой спеки, too-large) уходит логике как есть — CtlReply с error: что
+     * сказать человеку и можно ли продолжать, решает она (Dispatcher.push, sweep). Слова отказа
+     * — одни, у логики, а не два разных текста.
      */
     override fun putFile(name: String, data: ByteArray): CtlReply = wrap { client.putFile(name, data) }
+
+    override fun listFiles(): CtlReply = wrap { client.listFiles() }
+
+    override fun rmFile(name: String): CtlReply = wrap { client.rmFile(name) }
 
     private inline fun wrap(f: () -> CtlResult): CtlReply {
         val r = try {
@@ -36,6 +40,8 @@ class LogicEngine(private val client: EngineClient) : Engine {
         } catch (e: EngineDown) {
             throw BridgeError(Shell.E_ENGINE_DOWN, e.message ?: "Движок не отвечает")
         } catch (e: EngineError) {
+            // too-large до отправки — тоже ответ, а не исключение: логика знает, что сказать.
+            if (e.kind == "too-large") return CtlReply(null, "", "", "too-large", "{\"error\":\"too-large\"}")
             throw BridgeError(Shell.E_ENGINE, e.message ?: "Движок отказал")
         } catch (e: IllegalArgumentException) {
             throw BridgeError(Shell.E_BAD_ARGS, e.message ?: "Недопустимое значение")

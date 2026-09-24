@@ -115,8 +115,8 @@ class Shell(val app: Context) {
             "engine.vlessProbe" -> engineJson(
                 engine.vlessProbe(args.getString("out"), optNode(args)),
             )
-            "engine.conns" -> engineJson(engine.conns())
-            "engine.dnsLog" -> engineJson(engine.dnsLog())
+            "engine.conns" -> feedJson(engine.conns(), "Список соединений на этом телефоне недоступен")
+            "engine.dnsLog" -> feedJson(engine.dnsLog(), "Журнал имён недоступен")
 
             "system.network" -> system.network().toString()
             "system.privateDns" -> privateDns.state().toString()
@@ -124,6 +124,7 @@ class Shell(val app: Context) {
             "apps.list" -> apps.list(args.optBoolean("system")).toString()
 
             "spec.apply" -> specApply(argsJson)
+            "settings.put", "backup.import" -> logic(method, argsJson).also { scheduleUpdates() }
 
             else -> if (method.substringBefore('.') in LOGIC_GROUPS) {
                 logic(method, argsJson)
@@ -210,8 +211,35 @@ class Shell(val app: Context) {
         throw EngineError(E_ENGINE, lastLine(r.stderr) ?: "Движок завершился с кодом ${r.code}")
     }
 
-    private fun optNode(args: JSONObject): Int? =
-        if (args.has("node") && !args.isNull("node")) args.getString("node").trim().toInt() else null
+    /**
+     * conns и dns-log: stdout — JSON, его и отдаём (ctl.md). Ненулевой код с пустым выводом у
+     * conns значит «conntrack недоступен» — это свойство телефона, а не сбой, и причина из
+     * stderr человеку ничего не скажет: отказ engine с фразой о состоянии. Движок старше этих
+     * команд — unknown-method, как для экрана любая команда, которой нет.
+     */
+    private fun feedJson(r: CtlResult, unavailable: String): String {
+        if (r.error == "unknown-command") throw ShellError(E_UNKNOWN_METHOD, "Недоступно в этой версии системы")
+        if (r.error == null && r.code != 0 && r.stdout.isBlank()) throw ShellError(E_ENGINE, unavailable)
+        return engineJson(r)
+    }
+
+    /** Номер узла у vless-probe: экран шлёт число, но строку с числом тоже примем. */
+    private fun optNode(args: JSONObject): Int? {
+        val v: Any? = args.opt("node")
+        if (v is Number) return v.toInt()
+        if (v is String) return v.trim().toIntOrNull() ?: throw ShellError(E_BAD_ARGS, "Неверный номер узла")
+        return null
+    }
+
+    /** Условие ежесуточного обновления — из модели (settings.put и backup.import могли его
+     *  сменить). schedule без force переставляет задание, только если условие другое. */
+    private fun scheduleUpdates() {
+        try {
+            UpdateJobService.schedule(app, dispatcher.updateUnmeteredOnly(), force = false)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "задание обновления не переставлено", e)
+        }
+    }
 
     // --- логика с поведением оболочки -----------------------------------------------------
 

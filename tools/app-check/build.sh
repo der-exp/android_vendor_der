@@ -16,8 +16,8 @@
 #
 # Чего это НЕ повторяет: скрытый API здесь — только то, что есть в stub (Soong видит всю
 # платформу); глобальные правила R8 платформы (build/make/core/proguard*.flags); dexpreopt;
-# сверку privapp-permissions при загрузке. Логика (src/com/der/splify2/logic) берётся настоящая,
-# если она уже есть, иначе — временная заглушка apps/Splify2/stub-logic.
+# сверку privapp-permissions при загрузке. Логика (src/com/der/splify2/logic) — настоящая, та же,
+# что гоняет стенд tools/app-check/logic-test.sh; экран — собранный assets/web (web/, npm run build).
 #
 # Входы (у всех умолчания для этой машины):
 #   SDK      Android SDK с platforms/android-36.1 и build-tools/36.1.0
@@ -55,15 +55,8 @@ mkdir -p "$OUT/stubs" "$OUT/gen" "$OUT/rclasses" "$OUT/classes" "$OUT/dex"
 
 step() { printf '== %s\n' "$*"; }
 
-# Логика: настоящая, если агент логики её уже положил, иначе заглушка ровно договорных
-# объявлений. Оба сразу нельзя — объявления совпадают.
-if find "$APP/src/com/der/splify2/logic" -name '*.kt' 2>/dev/null | grep -q .; then
-	LOGIC_SRC=
-	echo "логика: src/com/der/splify2/logic"
-else
-	LOGIC_SRC=$APP/stub-logic
-	echo "логика: заглушка stub-logic"
-fi
+[ -f "$APP/src/com/der/splify2/logic/Dispatcher.kt" ] || { echo "нет логики src/com/der/splify2/logic" >&2; exit 2; }
+[ -f "$APP/assets/web/index.html" ] || { echo "нет собранного экрана assets/web (cd apps/Splify2/web && npm run build)" >&2; exit 2; }
 
 step "stub скрытого API"
 javac -nowarn --release 17 -d "$OUT/stubs" $(find "$here/stubs" -name '*.java')
@@ -73,15 +66,12 @@ step "aapt2 compile"
 "$BT/aapt2" compile --dir "$APP/res" -o "$OUT/res.zip"
 
 step "aapt2 link"
-ASSETS=
-if [ -d "$APP/assets" ]; then ASSETS="-A $APP/assets"; else echo "  (assets/ нет — APK без экрана)"; fi
-# shellcheck disable=SC2086
 "$BT/aapt2" link -I "$ANDROID_JAR" \
 	--manifest "$APP/AndroidManifest.xml" \
 	--min-sdk-version $MIN_SDK --target-sdk-version $MIN_SDK \
 	--version-code $VERSION_CODE --version-name $VERSION_NAME \
 	--java "$OUT/gen" --proguard "$OUT/aapt-rules.pro" \
-	$ASSETS -o "$OUT/base.apk" "$OUT/res.zip"
+	-A "$APP/assets" -o "$OUT/base.apk" "$OUT/res.zip"
 
 step "javac R"
 javac -nowarn --release 17 -cp "$ANDROID_JAR" -d "$OUT/rclasses" $(find "$OUT/gen" -name '*.java')
@@ -96,7 +86,6 @@ step "kotlinc"
 	-cp "$ANDROID_JAR:$OUT/hidden-stubs.jar:$STDLIB:$OUT/rclasses" \
 	-d "$OUT/classes" \
 	$(find "$APP/src" -name '*.kt') \
-	$( [ -n "$LOGIC_SRC" ] && find "$LOGIC_SRC" -name '*.kt' ) \
 	2>&1 | tee "$OUT/kotlinc.log"
 if grep -q '^error:\|: error:' "$OUT/kotlinc.log"; then echo "kotlinc: ошибки" >&2; exit 1; fi
 if grep -q 'warning:' "$OUT/kotlinc.log"; then
@@ -170,6 +159,18 @@ for c in MainActivity UpdateJobService Splify2App; do
 	grep -q "Class descriptor *: 'Lcom/der/splify2/$c;'" "$OUT/dexdump.txt" ||
 		{ echo "в dex нет com.der.splify2.$c" >&2; fail=1; }
 done
+
+# Экран внутри APK: страница и бандл, на которые она ссылается (WebAssets отдаёт их из assets/).
+python3 -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$OUT/Splify2.apk" > "$OUT/apk-list.txt"
+for f in $(cd "$APP/assets" && find web -type f | sort); do
+	grep -qx "assets/$f" "$OUT/apk-list.txt" || { echo "в APK нет assets/$f" >&2; fail=1; }
+done
+for f in $(grep -o '\(src\|href\)="[^"]*"' "$APP/assets/web/index.html" | sed 's/^[a-z]*="//; s/"$//; s#^\./##; s#^/##'); do
+	case $f in http*|data:*) continue ;; esac
+	grep -qx "assets/web/$f" "$OUT/apk-list.txt" || { echo "страница ссылается на $f, а в APK его нет" >&2; fail=1; }
+done
+# В APK — только приложение: ни исходников экрана, ни стенда, ни карт исходников.
+if grep -Eq '^(web|tests|stub-logic|src)/|\.(map|kt|tsx?)$' "$OUT/apk-list.txt"; then echo "в APK лишнее" >&2; fail=1; fi
 
 size=$(wc -c < "$OUT/Splify2.apk")
 echo "APK: $OUT/Splify2.apk ($size байт)"

@@ -255,7 +255,7 @@ class MainActivity : Activity() {
     // --- резервная копия: «Сохранить как» ----------------------------------------------
 
     /**
-     * backup.export: логика пишет JSON модели в свой файл и отвечает {"file":путь}; оболочка
+     * backup.export: логика пишет JSON модели в свой файл и отвечает {"file","name","bytes"}; оболочка
      * отдаёт его системному «Сохранить как» (BRIDGE.md). Странице ответ приходит после того,
      * как человек выбрал место или закрыл окно: к результату логики добавляется saved.
      * Системное окно выбора файла — единственный путь наружу из данных приложения, который не
@@ -294,7 +294,10 @@ class MainActivity : Activity() {
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("application/json")
-            .putExtra(Intent.EXTRA_TITLE, getString(R.string.backup_file_name, LocalDate.now().toString()))
+            // Имя — то, что дала логика (с датой и временем выгрузки); без него — своё с датой.
+            .putExtra(Intent.EXTRA_TITLE, JSONObject(result).optString("name").ifEmpty {
+                getString(R.string.backup_file_name, LocalDate.now().toString())
+            })
         try {
             startActivityForResult(intent, rc)
         } catch (e: ActivityNotFoundException) {

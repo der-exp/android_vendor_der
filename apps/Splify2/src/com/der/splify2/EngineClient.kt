@@ -77,23 +77,26 @@ class EngineClient(private val path: String = SOCKET_PATH) {
     fun dnsLog(): CtlResult = run("dns-log", timeoutSec = 15)
 
     /**
-     * Положить файл списка в /data/misc/steer/lists/<name>. Команды put-file у сервера пока нет
-     * (BRIDGE.md, «Файлы списков и движок»): до её появления сервер отвечает unknown-command —
-     * это обычный ответ с error, и логика показывает человеку отказ engine, вместо того чтобы
-     * молча собрать спеку со ссылками на несуществующие файлы (LogicEngine.putFile).
-     * Форма запроса выбрана по образцу apply: имя и длина тела последними словами.
+     * Файлы списков в каталоге движка (ctl.md, «put-file, list-files, rm-file»): положить,
+     * перечислить, убрать. Сервер старше этих команд отвечает unknown-command — это обычный
+     * ответ с error, и что с ним делать, решает логика (Dispatcher.push и sweep): без put-file
+     * применение со списками честно не проходит, без list-files/rm-file старые файлы остаются.
+     * Сроков у команд на сервере нет — это запись файла, а не подкоманда; клиенту хватает
+     * минуты на 16 МиБ по локальному сокету.
      */
     fun putFile(name: String, data: ByteArray): CtlResult =
-        run("put-file ${word(name, FILE_WORD)}", body = data, timeoutSec = 60)
+        run("put-file ${fileWord(name)}", body = data, timeoutSec = 60, maxBody = MAX_FILE)
+    fun listFiles(): CtlResult = run("list-files", timeoutSec = 15)
+    fun rmFile(name: String): CtlResult = run("rm-file ${fileWord(name)}", timeoutSec = 15)
 
     /**
      * Один запрос. busy (у сервера уже четыре запроса) повторяем дважды с короткой паузой:
      * это обычная толчея, когда экран открылся и разом спрашивает status, diag и версию.
      */
-    fun run(line: String, body: ByteArray? = null, timeoutSec: Int): CtlResult {
+    fun run(line: String, body: ByteArray? = null, timeoutSec: Int, maxBody: Int = MAX_BODY): CtlResult {
         var attempt = 0
         while (true) {
-            val r = once(line, body, timeoutSec)
+            val r = once(line, body, timeoutSec, maxBody)
             if (r.error != "busy" || attempt >= 2) return r
             attempt++
             try {
@@ -105,8 +108,10 @@ class EngineClient(private val path: String = SOCKET_PATH) {
         }
     }
 
-    private fun once(line: String, body: ByteArray?, timeoutSec: Int): CtlResult {
-        if (body != null && body.size > MAX_BODY) {
+    private fun once(line: String, body: ByteArray?, timeoutSec: Int, maxBody: Int): CtlResult {
+        // Предел — до отправки: слишком большое тело сервер отвергает, не читая, и наша запись
+        // тела оборвалась бы на середине (ctl.md).
+        if (body != null && body.size > maxBody) {
             throw EngineError("too-large", "Слишком большой файл: ${body.size / 1024} КиБ")
         }
         val head = if (body != null) "$line ${body.size}\n" else "$line\n"
@@ -206,21 +211,29 @@ class EngineClient(private val path: String = SOCKET_PATH) {
         return v
     }
 
+    /** Имя файла списка — ещё и без «..» где угодно (сервер проверяет так же). */
+    private fun fileWord(v: String): String {
+        require(!v.contains("..")) { "недопустимое имя файла: $v" }
+        return word(v, FILE_WORD)
+    }
+
     companion object {
         const val SOCKET_PATH = "/data/misc/steer/steer.sock"
         private const val TAG = "splify2.engine"
         private const val MAX_LINE = 512
+        // Тело спеки (apply, check) — до 1 МиБ, тело файла (put-file) — до 16 МиБ (ctl.md).
         private const val MAX_BODY = 1 shl 20
+        private const val MAX_FILE = 16 shl 20
         // stdout 1 МиБ + stderr 64 КиБ, каждый байт в JSON может стать \uXXXX (6 байт) —
         // верхняя граница с запасом; больше сервер прислать не может.
         private const val MAX_REPLY = 8 shl 20
         private const val REPLY_MARGIN_SEC = 10
 
         // Имя выхода — [A-Za-z0-9_.-] до 31 знака; адрес или имя у explain — ещё «:» и «/»,
-        // до 253 знаков (ctl.md, «Запрос»). Имя файла списка — как имя выхода, но длиннее:
-        // имена списков каталога бывают длиннее 31 знака.
+        // до 253 знаков (ctl.md, «Запрос»). Имя файла списка — как имя выхода, но до 64 знаков
+        // и не с «.»: так проверяет сервер.
         private val NAME_WORD = Regex("[A-Za-z0-9_][A-Za-z0-9_.-]{0,30}")
         private val ADDR_WORD = Regex("[A-Za-z0-9_:][A-Za-z0-9_.:/-]{0,252}")
-        private val FILE_WORD = Regex("[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
+        private val FILE_WORD = Regex("[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}")
     }
 }
