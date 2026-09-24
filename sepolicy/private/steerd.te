@@ -34,7 +34,32 @@ allow steerd self:global_capability_class_set { net_admin net_raw net_bind_servi
 allow steerd self:netlink_netfilter_socket { create bind write read setopt getopt };
 
 # netlink route — ip rule/route и чтение состояния интерфейсов сторожем.
-allow steerd self:netlink_route_socket { create bind write read setopt getopt nlmsg_read nlmsg_write };
+allow steerd self:netlink_route_socket { create bind write read setopt getopt nlmsg_read nlmsg_write nlmsg };
+
+# ЗАДЕЛ НА policycap netlink_xperm (ядро 6.13 и новее; в lineage-23.2 не включён). С этой
+# возможностью ядро проверяет сообщения netlink не парой nlmsg_read/nlmsg_write, а правом nlmsg
+# с расширенным списком типов сообщений, — и тогда домену остаётся только список netdomain
+# (net.te: unpriv_route_socket_nlmsgs — одни RTM_GET*, без RTM_GETLINK), то есть ни ip rule, ни
+# маршрута выхода, ни адреса TUN движок поставить бы не смог. Здесь — ровно то, что зовёт
+# движок: `ip rule add/del/show`, `ip route add/replace/flush/show` (flush — это дамп и
+# RTM_DELROUTE), `ip addr replace` (адрес TUN), `ip link set` (поднять TUN; ip при этом
+# спрашивает индекс устройства через RTM_GETLINK), и RTM_GETLINK/RTM_GETADDR сторожа.
+# netd берёт весь диапазон (priv_route_socket_nlmsgs); нам столько не нужно.
+#
+# Без возможности эти строки ничего не меняют: правило allowxperm с nlmsg действует, только
+# когда её включила политика и её знает ядро (4.9 телефона не знает вовсе). Компилируется
+# checkpolicy/secilc платформы и сейчас — тем же синтаксисом платформа пишет права netd и dhcp.
+#
+# netlink_netfilter_socket (nftables и ctnetlink — загрузка правил, элементы наборов, снятие
+# соединений conntrack) списков не требует: ядро проверяет типы сообщений только у сокетов
+# route, tcpdiag, xfrm и audit (security/selinux/nlmsgtab.c), у netfilter — нет. tcpdiag,
+# xfrm и audit движок не открывает.
+allowxperm steerd self:netlink_route_socket nlmsg {
+    RTM_NEWLINK RTM_DELLINK RTM_GETLINK RTM_SETLINK
+    RTM_NEWADDR RTM_DELADDR RTM_GETADDR
+    RTM_NEWROUTE RTM_DELROUTE RTM_GETROUTE
+    RTM_NEWRULE RTM_DELRULE RTM_GETRULE
+};
 
 # Резолвер dnsd слушает UDP/TCP и ходит к апстриму. tun_socket + /dev/tun — для выходов,
 # которые поднимают свой туннель (vless/xsteer): движок сам создаёт TUN и привязывает к нему
@@ -96,7 +121,17 @@ allow steerd steerd_data_file:lnk_file { create read getattr unlink };
 # родился бы steerd_data_file — и splify2, которому разрешён ровно steerd_socket, получил
 # бы отказ, а разрешать ему весь каталог данных значило бы сломать запрет ниже.
 type_transition steerd steerd_data_file:sock_file steerd_socket "steer.sock";
-allow steerd steerd_socket:sock_file { create setattr unlink getattr };
+# write — для connect: сервер при старте пробует подключиться к прежнему файлу сокета, чтобы
+# не отнять его у живого соседа (src/ctl.c, ctl_listen), и так же подключается `steer ctl`,
+# запущенный в этом домене.
+allow steerd steerd_socket:sock_file { create setattr unlink getattr write };
+
+# Сервер сокета (steer ctl-serve) и сам сокет: слушать и принимать (listen, accept) и узнать
+# собеседника (getopt: SO_PEERCRED, SO_PEERSEC) — это всё права на СВОЙ сокет, их даёт
+# domain.te всем доменам (self:unix_stream_socket create_stream_socket_perms). reload находит
+# резолвер и супервизор по /proc/<pid>/exe и посылает им SIGHUP/SIGTERM — тоже только внутри
+# своего домена (domain.te: r_dir_file(domain, self), self:process signal), чужие процессы
+# домену не видны. Своих строк для этого здесь поэтому нет.
 
 # Каталог /system_ext/bin/der — свой тип (см. file_contexts): его могут обходить только init
 # (запуск сервиса) и сам демон.

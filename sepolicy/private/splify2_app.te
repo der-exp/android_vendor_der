@@ -14,8 +14,10 @@ app_domain(splify2_app)
 net_domain(splify2_app)
 
 # Единственная дверь: подключиться к управляющему сокету движка. Больше splify2 к движку
-# ничего не нужно — ни файлы, ни процесс. Через этот сокет идут команды (применить спеку,
-# перечитать стратегии) и чтение снимка состояния.
+# ничего не нужно — ни файлы, ни процесс. За сокетом — сервер `steer ctl-serve` (сервис
+# steerd-ctl): status, diag, explain, apply и check со спекой в теле запроса, reload, пробы
+# узлов VLESS (протокол — docs/ctl.md в дереве steer). Сервер сам проверяет собеседника: этот
+# домен он узнаёт по контексту SELinux (SO_PEERSEC), а не по uid, которого заранее не знать.
 allow splify2_app steerd_socket:sock_file { read write getattr };
 # Дойти до сокета: /data/misc обходит любой домен (domain.te), а каталог движка — только мы.
 allow splify2_app steerd_data_file:dir search;

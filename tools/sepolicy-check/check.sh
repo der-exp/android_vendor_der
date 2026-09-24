@@ -247,5 +247,26 @@ sepolicy_tests.do_main(so)
 		echo "FAIL sepolicy_tests — $d/sepolicy_tests.log:"; tail -20 "$d/sepolicy_tests.log"
 		rc=1
 	fi
+
+	# 6. Задел на policycap netlink_xperm (ядро 6.13+, ждём с Android 17). С ней ядро судит о
+	#    сообщениях netlink по спискам allowxperm … nlmsg, и домену steerd без своего списка
+	#    остались бы одни RTM_GET* от netdomain — ни ip rule, ни маршрута выхода. Возможность
+	#    включается здесь поверх той же политики: вся политика должна компилироваться и с ней, а
+	#    в итоговой политике должен найтись список steerd (см. sepolicy/private/steerd.te).
+	if grep -q '^policycap netlink_xperm;' "$d/neverallows.conf"; then
+		cp "$d/neverallows.conf" "$d/xperm.conf"
+	else
+		sed 's/^policycap network_peer_controls;$/&\npolicycap netlink_xperm;/' \
+			"$d/neverallows.conf" > "$d/xperm.conf"
+	fi
+	if grep -q '^policycap netlink_xperm;' "$d/xperm.conf" &&
+	   "$CHECKPOLICY" -M -c 30 -o "$d/xperm.bin" "$d/xperm.conf" > "$d/xperm.log" 2>&1 &&
+	   "$CHECKPOLICY" -M -C -c 30 -o "$d/xperm.cil" "$d/xperm.conf" >> "$d/xperm.log" 2>&1 &&
+	   grep -q '(allowx steerd self (nlmsg netlink_route_socket' "$d/xperm.cil"; then
+		echo "ok   policycap netlink_xperm (список nlmsg у steerd)"
+	else
+		echo "FAIL policycap netlink_xperm — $d/xperm.log:"; grep -iv 'loading\|loaded\|writing' "$d/xperm.log" | head -20
+		rc=1
+	fi
 done
 exit $rc
