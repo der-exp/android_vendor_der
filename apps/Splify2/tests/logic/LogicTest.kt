@@ -9,7 +9,9 @@
  *   - разбор каталога — на настоящем lists.json из splify2-lists;
  *   - разбор наборов .srs — байт в байт с `steer srs-read` на настоящих наборах издателя;
  *   - счёт узлов подписки — с разбором движка (subcount.c) на образцах его стенда;
- *   - методы моста целиком (Dispatcher) против того же движка и записанной сети.
+ *   - методы моста целиком (Dispatcher) против того же движка и записанной сети;
+ *   - выход WireGuard и via (AwgTest.kt): разбор файла — вердикт в вердикт с движком, сборка
+ *     спеки, цепочки via и их отказы.
  *
  * Без фреймворка: на машине нет JUnit, а стенду нужна одна функция сравнения и счётчик.
  */
@@ -51,7 +53,8 @@ lateinit var WORK: File
 fun tmp(name: String): File = File(WORK, name).also { it.deleteRecursively(); it.mkdirs() }
 
 /** Источник файлов для сборщика без скачивания: файл «есть», если он лежит в каталоге списков стенда. */
-internal class StubSource(val cat: Catalog?, val dir: File, val narrows: Map<String, Narrow> = emptyMap(), val subs: Map<String, String> = emptyMap()) : FileSource {
+internal class StubSource(val cat: Catalog?, val dir: File, val narrows: Map<String, Narrow> = emptyMap(), val subs: Map<String, String> = emptyMap(),
+                          val awgs: Map<String, String> = emptyMap()) : FileSource {
     override fun service(id: String) = cat?.service(id)
     override fun has(name: String) = File(dir, name).isFile
     override fun narrow(name: String) = narrows[name]
@@ -59,6 +62,7 @@ internal class StubSource(val cat: Catalog?, val dir: File, val narrows: Map<Str
     override fun custom(c: CustomList) =
         (if (c.domains.isNotEmpty()) Names.flat("ud-", c.name, ".lst") else null) to (if (c.prefixes.isNotEmpty()) Names.flat("up-", c.name, ".lst") else null)
     override fun subFile(id: String) = subs[id]
+    override fun awgFile(id: String) = awgs[id]
 }
 
 fun model(json: String): Model = Model.parse(JSONObject(json))
@@ -581,7 +585,12 @@ fun main(args: Array<String>) {
     try { testSpecs(cat, eng) } finally { eng.stop() }
     testDispatcher()
     testUpdate()
+    testAwg()
 
-    println("logic: $pass passed, $fail failed")
+    if (pending.isNotEmpty()) {
+        println("ОЖИДАЮТ ДВИЖКА (не проверены против настоящего движка):")
+        pending.forEach { println("  - $it") }
+    }
+    println("logic: $pass passed, $fail failed" + if (pending.isNotEmpty()) ", ${pending.size} pending" else "")
     System.exit(if (fail == 0) 0 else 1)
 }

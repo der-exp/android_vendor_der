@@ -34,7 +34,7 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.TimeUnit
 
 class HostEngine(
-    private val steer: String,
+    val steer: String,
     val work: File,
     var putFileSupported: Boolean = true,
 ) : Engine {

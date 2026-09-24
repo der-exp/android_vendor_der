@@ -1,6 +1,11 @@
 /*
  * Методы логики для моста (apps/Splify2/BRIDGE.md): группы settings, spec, lists, subs, backup.
  *
+ * Группа outputs — только то, что не укладывается в черновик модели: файл WireGuard
+ * (outputs.importAwg). Сами выходы, их «через выход» и удаление экран правит черновиком и шлёт
+ * settings.put, как выходы VLESS: одна дорога для всех видов выходов, и пилюля «Применить»
+ * считает их одинаково.
+ *
  * Роль — та же, что у объекта rpcd `splify2` на роутере: экран зовёт метод по имени с JSON и
  * получает JSON. Отличия — от платформы:
  *   - движок — не программа, а управляющий сокет (Engine): спека уходит телом команды, файлы
@@ -47,6 +52,7 @@ class Dispatcher(
     private val fetcher = Fetcher(http)
     private val lists = ListStore(dir, fetcher)
     private val subs = SubStore(dir, http, device)
+    private val awg = AwgStore(dir)
     private val dirFile = File(dir, "lists/engine-dir.json")
 
     /** Каталог списков у движка — то, что пишется в спеку путями файлов. Сначала — данный
@@ -111,6 +117,7 @@ class Dispatcher(
                 "subs.refresh" -> subsRefresh(args.str("id"))
                 "backup.export" -> backupExport()
                 "backup.import" -> backupImport(args)
+                "outputs.importAwg" -> importAwg(args)
                 else -> throw BridgeError("unknown-method", "Эта версия приложения не знает такого действия")
             }
             return r.toString()
@@ -161,11 +168,72 @@ class Dispatcher(
         val subsJson = JSONArray()
         for (s in cur.subs) subsJson.put(JSONObject().put("id", s.id).put("name", names[s.id] ?: s.name).put("kind", s.kind).also { o -> s.url?.let { o.put("url", it) } })
         merged.put("subs", subsJson)
-        val m = Model.parse(merged)
+        val m = withAwgInfo(Model.parse(merged))
         if (m.catalogUrl != cur.catalogUrl) lists.dropCatalog()
         saveModel(m)
+        pruneAwg(m)
         JSONObject().put("saved", true)
     }
+
+    /** Описание выходов WireGuard — из сохранённых файлов, а не из присланного экраном.
+     *
+     *  Экран шлёт `info` таким, каким получил от importAwg, но модель — это ещё и резервная
+     *  копия, и то, что лежит в ней, должно говорить правду о файле, на который ссылается. Файла
+     *  нет — отказ сразу, словами человека: иначе выход дошёл бы до сборки спеки и отказал там. */
+    private fun withAwgInfo(m: Model): Model {
+        if (m.outputs.none { it.kind == OutKind.AWG }) return m
+        return m.copy(outputs = m.outputs.map { o ->
+            if (o.kind != OutKind.AWG) o
+            else o.copy(info = awg.info(o.conf!!) ?: throw BridgeError("bad-args", "Выход «${o.name}»: файл настроек WireGuard не найден — добавьте выход заново"))
+        })
+    }
+
+    private fun pruneAwg(m: Model) {
+        val keep = HashSet<String>()
+        (m.outputs + (appliedModel()?.outputs ?: emptyList())).forEach { o -> o.conf?.let { keep.add(it) } }
+        awg.prune(keep)
+    }
+
+    // ---- outputs ------------------------------------------------------------------------
+
+    /** outputs.importAwg {text, name?}: проверить файл WireGuard, сохранить у приложения и
+     *  вернуть ссылку с описанием. В модель выход попадает черновиком экрана (settings.put). */
+    private fun importAwg(a: JSONObject): JSONObject {
+        val text = a.str("text") ?: ""
+        if (text.isBlank()) throw BridgeError("bad-args", "Вставьте текст файла WireGuard или выберите файл")
+        val name = a.str("name")?.trim()?.ifEmpty { null }
+        // Имя проверяется той же проверкой модели, чтобы отказ пришёл до выбора файла, а не
+        // после «Применить».
+        if (name != null) Model.parse(JSONObject().put("outputs", JSONArray().put(JSONObject().put("name", name).put("kind", "interface").put("devices", JSONArray().put("x")))))
+        val (id, info) = awg.put(text)
+        val r = JSONObject().put("conf", id).put("info", info.toJson())
+        if (name != null) r.put("name", name)
+        return r
+    }
+
+    /** Точно ли движок НЕ умеет via. Сначала — умения из status (контракт: `via` в features).
+     *  status без сохранённой спеки не отвечает (самое первое применение), и тогда вопрос
+     *  задаётся компилятору: спеку с via на несуществующий выход движок с via отвергает всегда,
+     *  а движок без via незнакомое поле пропускает молча — принял, значит via не знает. Не
+     *  ответил ни на то, ни на другое — «не знаю», и применение скажет причину само. */
+    private fun viaUnsupported(): Boolean {
+        try {
+            val r = engine.status()
+            if (r.error == null && r.code == 0) {
+                val f = JSONObject(r.stdout.trim()).optJSONArray("features")
+                if (f != null) return (0 until f.length()).none { f.opt(it) == "via" }
+            }
+        } catch (e: Exception) {
+        }
+        return try {
+            val r = engine.check(VIA_PROBE)
+            r.error == null && r.code == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private val viaMessage = "Эта версия системы не умеет пускать выход через другой выход — обновите систему или уберите «через выход»"
 
     // ---- файлы для сборки ---------------------------------------------------------------
 
@@ -176,6 +244,7 @@ class Dispatcher(
         override fun extraPrefixes(name: String) = lists.extraPrefixes(name)
         override fun custom(c: CustomList) = lists.customNames(c)
         override fun subFile(id: String) = subs.engineName(id)
+        override fun awgFile(id: String) = if (awg.has(id)) AwgStore.engineName(id) else null
     }
 
     private fun fileBytes(name: String): ByteArray? {
@@ -185,6 +254,7 @@ class Dispatcher(
             val id = name.removePrefix("sub-").substringBefore('-')
             return subs.content(id)?.takeIf { subs.engineName(id) == name }
         }
+        AwgStore.idOf(name)?.let { return awg.bytes(it) }
         val f = lists.file(name)
         return if (f.isFile) f.readBytes() else null
     }
@@ -315,7 +385,9 @@ class Dispatcher(
         } else {
             check.put("code", r.code ?: -1).put("stderr", r.stderr)
         }
-        return JSONObject().put("spec", built.spec).put("check", check).put("warnings", jsonArrayOf(built.warnings))
+        val warnings = ArrayList(built.warnings)
+        if (built.usesVia && viaUnsupported()) warnings.add(viaMessage)
+        return JSONObject().put("spec", built.spec).put("check", check).put("warnings", jsonArrayOf(warnings))
             .put("needs_local_dns", built.needsLocalDns)
     }
 
@@ -326,6 +398,7 @@ class Dispatcher(
         ensureFiles(m, cat, warnings)
         val built = builder.build(m, Src(cat))
         warnings.addAll(built.warnings)
+        if (built.usesVia && viaUnsupported()) throw BridgeError("engine", viaMessage)
         // Проверка ДО заливки и до apply: отвергнутую спеку незачем сопровождать файлами, и
         // человеку причина нужна сразу, словами проверки, а не словами отката.
         val chk = engine.check(built.text)
@@ -667,9 +740,13 @@ class Dispatcher(
     }
 
     companion object {
+        /** Спека-вопрос «знаешь ли via» (viaUnsupported): движок с via её отвергает. */
+        internal const val VIA_PROBE = """{"schema":1,"outputs":{"direct":{"kind":"direct"},"via-probe":{"kind":"interface","devices":["probe0"],"via":"absent-output"}},"channels":[]}"""
+
         /** Имена файлов, которые логика кладёт в каталог движка: службы каталога (d-, p-, m-),
-         *  свои списки (ud-, up-) — Names.flat; подписки — SubStore.engineName. */
-        private val OWN_FILE = Regex("^(d|p|m|ud|up)-[A-Za-z0-9_.-]+\\.lst$|^sub-[a-z0-9]+-[0-9a-f]{8}\\.txt$")
+         *  свои списки (ud-, up-) — Names.flat; подписки — SubStore.engineName; файлы WireGuard —
+         *  AwgStore.engineName. */
+        private val OWN_FILE = Regex("^(d|p|m|ud|up)-[A-Za-z0-9_.-]+\\.lst$|^sub-[a-z0-9]+-[0-9a-f]{8}\\.txt$|^awg-[0-9a-f]{16}\\.conf$")
 
         /** Имена из ответа list-files. Разбор терпимый: по ctl.md список лежит в самом ответе
          *  (`"files":[{"name":…}]`), но сервер, отдающий его выводом подкоманды, положил бы тот
@@ -693,13 +770,17 @@ class Dispatcher(
         val m = loadModel()
         val subsContent = JSONObject()
         for (s in m.subs) subs.content(s.id)?.let { subsContent.put(s.id, String(it, Charsets.UTF_8)) }
+        // Файлы WireGuard — в копию целиком: без них восстановленный выход не на что поднять,
+        // а заново взять их, в отличие от подписки по ссылке, неоткуда.
+        val awgContent = JSONObject()
+        for (o in m.outputs) o.conf?.let { id -> awg.text(id)?.let { awgContent.put(id, it) } }
         val o = JSONObject()
             .put("format", Backup.FORMAT).put("version", Backup.VERSION).put("created", nowSec())
             // Как в шапке архива роутера: внутри ссылки vless:// — то же, что пароль от всех
             // подключений. Предупреждение лежит в самом файле, потому что файл уходит дальше
             // экрана, на котором его сохранили.
-            .put("note", "Настройки splify2. ВНИМАНИЕ: внутри ссылки подписок — это доступ ко всем подключениям; не выкладывайте файл в чаты и общие папки.")
-            .put("model", m.toJson()).put("subs", subsContent)
+            .put("note", "Настройки splify2. ВНИМАНИЕ: внутри ссылки подписок и ключи WireGuard — это доступ ко всем подключениям; не выкладывайте файл в чаты и общие папки.")
+            .put("model", m.toJson()).put("subs", subsContent).put("awg", awgContent)
         val name = "splify2-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date()) + ".json"
         val f = File(dir, "exports/$name")
         File(dir, "exports").listFiles()?.forEach { it.delete() }   // старые выгрузки не копим
@@ -717,8 +798,9 @@ class Dispatcher(
                 val b = body.toByteArray(Charsets.UTF_8)
                 subs.store(id, b, null, SubParse.stats(body))
             }
+            for (text in parsed.awg.values) awg.put(text)
             if (parsed.model.catalogUrl != loadModel().catalogUrl) lists.dropCatalog()
-            saveModel(parsed.model)
+            saveModel(withAwgInfo(parsed.model))
         }
         return JSONObject().put("saved", true)
     }
@@ -730,7 +812,7 @@ internal object Backup {
     const val VERSION = 1
     private const val MAX_SUB = 1 shl 20
 
-    class Parsed(val model: Model, val subs: Map<String, String>)
+    class Parsed(val model: Model, val subs: Map<String, String>, val awg: Map<String, String>)
 
     /** Разбор строгий: чужой или испорченный файл — отказ целиком, а не «что понял — то взял»
      *  (как backup_split на роутере: молча восстановить половину хуже, чем ничего). */
@@ -753,6 +835,20 @@ internal object Backup {
             if (body.length > MAX_SUB) throw BridgeError("bad-args", "Подписка «${s.name}» в файле слишком велика")
             subs[s.id] = body
         }
-        return Parsed(model, subs)
+        // Файл WireGuard проверяется тем же разбором, что при добавлении, и обязан совпасть со
+        // ссылкой: ссылка — хеш содержимого, и несовпадение значит, что файл правили руками или
+        // он повреждён. Восстановить выход с другими ключами молча было бы хуже отказа.
+        val awg = LinkedHashMap<String, String>()
+        val aj = o.optJSONObject("awg") ?: JSONObject()
+        for (x in model.outputs) {
+            val id = x.conf ?: continue
+            val text = aj.str(id) ?: throw BridgeError("bad-args", "В файле нет настроек WireGuard выхода «${x.name}»")
+            val norm = AwgConf.normalize(text)
+            AwgConf.parse(norm)
+            if (sha256hex(norm.toByteArray(Charsets.UTF_8)).take(16) != id)
+                throw BridgeError("bad-args", "Настройки WireGuard выхода «${x.name}» в файле повреждены")
+            awg[id] = norm
+        }
+        return Parsed(model, subs, awg)
     }
 }

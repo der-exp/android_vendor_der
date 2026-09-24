@@ -25,7 +25,11 @@
  *     "outputs": [
  *       {"name":"vpn", "kind":"interface", "devices":["wg0"], "on_fail":"drop"},
  *       {"name":"nl",  "kind":"vless", "sub":"s1", "nodes":[2,5], "on_fail":"drop"},
- *       {"name":"tg",  "kind":"tgws", "domain":"example.com"}
+ *       {"name":"tg",  "kind":"tgws", "domain":"example.com"},
+ *       {"name":"fi",  "kind":"awg", "conf":"0123456789abcdef",   // файл WireGuard в files/awg (Awg.kt)
+ *        "info":{"endpoint":"198.51.100.7:51820","peers":1,"obfs":true,"mtu":1280,
+ *                "addresses":["10.8.0.2/32"],"ignored":["DNS"]},
+ *        "via":"nl", "on_fail":"drop"}                 // туннель выхода — через выход nl
  *     ],
  *     "channels": [                                  // сверху вниз, первое совпадение побеждает
  *       {"name":"YouTube", "enabled":true,
@@ -50,6 +54,19 @@
  *
  * Выход `direct` есть всегда и в модели его заводить не нужно (как withDirect в интерфейсе
  * роутера): «напрямую» — законная цель правила, а не настройка, которую можно забыть.
+ *
+ * ВЫХОД WIREGUARD (kind awg). В модели — не ключи, а ссылка на файл (`conf`, начало SHA-256
+ * текста; сам текст — files/awg/<conf>.conf, AwgStore) и несекретное описание `info` для
+ * экрана. Ключи в модели означали бы ключи в settings.get, то есть в памяти страницы и в любом
+ * снимке черновика; ссылка по содержимому — то же, что имя файла подписки с хешем. `info`
+ * логика перезаписывает из файла при каждом settings.put: присланное экраном — только подпись.
+ *
+ * VIA — «через какой выход идёт сам туннель» (контракт steer, via): WireGuard внутри VLESS —
+ * awg с via на vless, VLESS поверх WireGuard — vless с via на awg. Проверки — здесь, словами
+ * человека, те же, что у движка (via_check в spec.c): нельзя через себя, через несуществующий
+ * выход, по кругу и цепочкой длиннее трёх переходов. На телефоне via бывает у vless и awg (у
+ * interface соединение открывает не движок, а xsteer и обфускатора в модели телефона нет), а
+ * цель — interface, vless или awg: у direct и tgws нет таблицы, куда вести метку.
  */
 package com.der.splify2.logic
 
@@ -57,7 +74,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class OutKind(val word: String) {
-    INTERFACE("interface"), DIRECT("direct"), VLESS("vless"), TGWS("tgws");
+    INTERFACE("interface"), DIRECT("direct"), VLESS("vless"), TGWS("tgws"), AWG("awg");
 
     companion object {
         fun of(s: String?): OutKind? = entries.firstOrNull { it.word == s }
@@ -79,6 +96,12 @@ data class Output(
     val nodes: List<Int> = emptyList(),
     /** kind=tgws: имя за Cloudflare для точек kwsN.<domain>. */
     val domain: String? = null,
+    /** kind=awg: id файла WireGuard в AwgStore. */
+    val conf: String? = null,
+    /** kind=awg: что известно о файле без ключей — для экрана. */
+    val info: AwgInfo? = null,
+    /** vless, awg: имя выхода, через который идёт собственный трафик туннеля; null — напрямую. */
+    val via: String? = null,
 )
 
 sealed class Who {
@@ -263,6 +286,7 @@ data class Model(
             val out = ArrayList<Output>()
             if (a == null) return out
             if (a.length() > 15) bad("Выходов больше 15 — столько движок не держит")
+            val vias = LinkedHashMap<String, String>()   // порядок выходов — чтобы круг назывался с первого
             for (i in 0 until a.length()) {
                 val x = a.optJSONObject(i) ?: bad("Выход №${i + 1} записан неверно")
                 val name = x.str("name") ?: bad("У выхода №${i + 1} нет имени")
@@ -275,6 +299,9 @@ data class Model(
                 // отвергает, и лучше сказать это здесь, словами человека.
                 if (onFail != null && onFail != "drop" && onFail != "direct")
                     bad("Выход «$name»: при отказе можно только блокировать или пускать напрямую")
+                // «Напрямую» и пустая строка значат одно — через выход не идёт (у движка via на
+                // direct — отказ, а для человека это просто пункт «нет»).
+                x.str("via")?.trim()?.takeIf { it.isNotEmpty() && it != "direct" }?.let { vias[name] = it }
                 when (kind) {
                     OutKind.INTERFACE -> {
                         val devs = x.optJSONArray("devices").strings().ifEmpty { listOfNotNull(x.str("device")) }
@@ -304,6 +331,7 @@ data class Model(
                         out.firstOrNull { it.kind == OutKind.VLESS && it.name.take(15) == name.take(15) }?.let {
                             bad("Выходы «${it.name}» и «$name» начинаются одинаково — сделайте различными первые 15 знаков")
                         }
+                        sameDevice(out, name, name.take(15))
                         out.add(Output(name, kind, sub = sub, nodes = nodes, onFail = onFail))
                     }
                     OutKind.TGWS -> {
@@ -314,9 +342,69 @@ data class Model(
                         if (onFail == "direct") bad("Выход «$name»: у моста Telegram при отказе возможна только блокировка")
                         out.add(Output(name, kind, domain = d))
                     }
+                    OutKind.AWG -> {
+                        val conf = x.str("conf") ?: bad("Выход «$name»: нет файла настроек — добавьте выход заново")
+                        if (!AwgStore.ID.matches(conf)) bad("Выход «$name»: файл настроек назван неверно — добавьте выход заново")
+                        // Один файл — один ключ: два устройства с одним приватным ключом делили бы
+                        // одну сессию на сервере и выбивали бы друг друга.
+                        out.firstOrNull { it.kind == OutKind.AWG && it.conf == conf }?.let {
+                            bad("Выходы «${it.name}» и «$name» используют один и тот же файл WireGuard — у каждого выхода должен быть свой")
+                        }
+                        sameDevice(out, name, awgDevice(name))
+                        out.add(Output(name, kind, onFail = onFail, conf = conf, info = awgInfoOf(x.optJSONObject("info"))))
+                    }
                 }
             }
-            return out
+            return checkVia(out, vias)
+        }
+
+        /** Имя устройства выхода awg — как awg_default_ifname движка (awg.h): имя выхода, если
+         *  оно до 15 знаков и не выдаёт туннель, иначе «if» и FNV-1a имени. */
+        internal fun awgDevice(name: String): String {
+            val bad = listOf("tun", "tap", "utun", "wg", "awg", "ppp", "pptp", "ipsec", "vpn", "l2tp", "wireguard", "amnezia")
+            if (name.length <= 15 && bad.none { name.startsWith(it, ignoreCase = true) }) return name
+            var h = 2166136261L
+            for (b in name.toByteArray(Charsets.UTF_8)) { h = h xor (b.toLong() and 0xff); h = (h * 16777619L) and 0xffffffffL }
+            return "if%08x".format(h)
+        }
+
+        /** Два туннеля, которые движок завёл бы под одним именем устройства, — второй бы не встал. */
+        private fun sameDevice(out: List<Output>, name: String, dev: String) {
+            out.firstOrNull {
+                (it.kind == OutKind.VLESS && it.name.take(15) == dev) || (it.kind == OutKind.AWG && awgDevice(it.name) == dev)
+            }?.let { bad("Выходы «${it.name}» и «$name» получили бы одно имя устройства — переименуйте один") }
+        }
+
+        /** Предел цепочки via — как у движка: a → b → c → d можно, четвёртый переход — отказ. */
+        const val VIA_MAX_HOPS = 3
+
+        private fun checkVia(out: List<Output>, vias: Map<String, String>): List<Output> {
+            if (vias.isEmpty()) return out
+            val byName = out.associateBy { it.name }
+            for ((name, via) in vias) {
+                val o = byName.getValue(name)
+                if (o.kind != OutKind.VLESS && o.kind != OutKind.AWG)
+                    bad("Выход «$name»: через другой выход может идти только VLESS или WireGuard")
+                if (via == name) bad("Выход «$name» не может идти через самого себя")
+                val t = byName[via] ?: bad("Выход «$name» идёт через выход «$via», которого нет — выберите другой")
+                if (t.kind != OutKind.INTERFACE && t.kind != OutKind.VLESS && t.kind != OutKind.AWG)
+                    bad("Выход «$name»: через «$via» идти нельзя — выберите туннель")
+            }
+            for (name in vias.keys) {
+                val path = arrayListOf(name)
+                var cur = vias[name]
+                while (cur != null) {
+                    if (cur in path) {
+                        path.add(cur)
+                        bad("Выходы идут по кругу: ${path.dropWhile { it != cur }.joinToString(" → ")} — уберите «через выход» у одного из них")
+                    }
+                    path.add(cur)
+                    if (path.size - 1 > VIA_MAX_HOPS)
+                        bad("Цепочка выходов длиннее трёх: ${path.joinToString(" → ")} — сократите её")
+                    cur = vias[cur]
+                }
+            }
+            return out.map { o -> vias[o.name]?.let { o.copy(via = it) } ?: o }
         }
 
         private fun parseChannels(a: JSONArray?, outputs: List<Output>, custom: List<CustomList>): List<Channel> {
@@ -414,8 +502,13 @@ data class Model(
                 OutKind.INTERFACE -> o.put("devices", jsonArrayOf(x.devices))
                 OutKind.VLESS -> o.put("sub", x.sub).put("nodes", jsonArrayOf(x.nodes))
                 OutKind.TGWS -> o.put("domain", x.domain)
+                OutKind.AWG -> {
+                    o.put("conf", x.conf)
+                    x.info?.let { o.put("info", it.toJson()) }
+                }
                 OutKind.DIRECT -> {}
             }
+            if (x.via != null) o.put("via", x.via)
             if (x.onFail != null) o.put("on_fail", x.onFail)
             return o
         }

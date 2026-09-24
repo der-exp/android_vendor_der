@@ -36,7 +36,14 @@
  *     недописанное правило сняло бы все. Об этом — предупреждение в ответе.
  *
  *   - ПУТИ ФАЙЛОВ — /data/misc/steer/lists/<имя> (listsDir). Сами файлы заливает SpecPusher до
- *     apply; здесь только перечень, какие нужны.
+ *     apply; здесь только перечень, какие нужны. Файл WireGuard выхода awg — из того же
+ *     перечня (awg-<id>.conf): у движка он лежит рядом со списками, потому что писать приложение
+ *     может только туда (ctl.md, put-file), а путь в `conf` спеки — абсолютный, любой.
+ *
+ *   - VIA переносится как есть: проверку (круг, глубина, допустимые виды) модель уже сделала
+ *     словами человека, а движок повторит её своей. BuiltSpec.usesVia — чтобы Dispatcher
+ *     спросил движок, умеет ли он via: движок постарше незнакомое поле спеки пропускает молча,
+ *     и туннель пошёл бы напрямую — ровно то, от чего via должен был увести.
  */
 package com.der.splify2.logic
 
@@ -50,6 +57,8 @@ internal class BuiltSpec(
     /** Есть ли доменные каналы на сам телефон — для Private DNS (ApplyResult.needsLocalDns). */
     val needsLocalDns: Boolean,
     val warnings: List<String>,
+    /** Есть ли выход с via — тогда движку нужно умение `via` (features в status). */
+    val usesVia: Boolean = false,
 ) {
     val text: String get() = spec.toString()
 }
@@ -64,6 +73,8 @@ internal interface FileSource {
     fun extraPrefixes(name: String): String?
     fun custom(c: CustomList): Pair<String?, String?>
     fun subFile(id: String): String?
+    /** Имя файла WireGuard у движка (awg-<id>.conf), если файл есть у приложения. */
+    fun awgFile(id: String): String?
 }
 
 internal class SpecBuilder(private val listsDir: String = DEFAULT_LISTS_DIR) {
@@ -102,7 +113,16 @@ internal class SpecBuilder(private val listsDir: String = DEFAULT_LISTS_DIR) {
                     if (o.nodes.isNotEmpty()) x.put("nodes", jsonArrayOf(o.nodes))
                 }
                 OutKind.TGWS -> x.put("domain", o.domain)
+                OutKind.AWG -> {
+                    // Без файла движок поднял бы устройство по пути, где ничего нет, и отказал бы
+                    // только строкой журнала; собирать такую спеку незачем.
+                    val f = o.conf?.let { src.awgFile(it) }
+                        ?: throw BridgeError("bad-args", "Выход «${o.name}»: файл настроек WireGuard не найден — добавьте выход заново")
+                    files.add(f)
+                    x.put("conf", path(f))
+                }
             }
+            if (o.via != null) x.put("via", o.via)
             if (o.onFail != null && o.kind != OutKind.DIRECT) x.put("on_fail", o.onFail)
             outputs.put(o.name, x)
         }
@@ -216,7 +236,7 @@ internal class SpecBuilder(private val listsDir: String = DEFAULT_LISTS_DIR) {
         spec.put("lan_devices", jsonArrayOf(m.tetherDevices.ifEmpty { Model.DEFAULT_TETHER }))
         spec.put("outputs", outputs)
         spec.put("channels", channels)
-        return BuiltSpec(spec, files, localDns, warnings)
+        return BuiltSpec(spec, files, localDns, warnings, m.outputs.any { it.via != null })
     }
 
     private fun matchOf(doms: Collection<String>, pfx: Collection<String>): JSONObject {

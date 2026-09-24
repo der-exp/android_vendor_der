@@ -16,7 +16,8 @@
 # через тот же протокол, что на телефоне, — это и есть сквозная проверка без телефона.
 # STEER_REAL_FILES=0 — для дерева steer старше этих команд: стенд делает их сам (HostEngine).
 #
-# Пути — переменными с умолчаниями этой машины: STEER_DIR (дерево steer), LISTS_DIR
+# Пути — переменными с умолчаниями этой машины: STEER_DIR (дерево steer), STEER_VIA_DIR
+# (необязательно: дерево steer с via, если его ещё нет в STEER_DIR), LISTS_DIR
 # (splify2-lists), KOTLINC, ANDROID_JAR, JSON_JAR, OUT.
 set -eu
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,9 +32,25 @@ CC="${CC:-cc}"
 mkdir -p "$OUT"
 
 SRC="src/steer.c src/spec.c src/dnsd.c src/failover.c src/aggregate.c src/obfs.c src/cli.c src/srs.c src/puff.c src/hwid.c src/ctl.c"
+# Выход kind=awg (src/awg.c) есть в дереве steer с ветки android-awg; движок старше его не знает.
+# Файл берётся, если он есть: стенд обязан собираться и с деревом до awg, и с деревом после.
+[ -f "$STEER_DIR/src/awg.c" ] && SRC="$SRC src/awg.c"
 echo "logic-test: движок (android, extended с заглушками туннеля)"
 (cd "$STEER_DIR" && $CC -O2 -w -DSTEER_VERSION='"logic-test"' -DSTEER_ANDROID -DSTEER_EXTENDED \
     -o "$OUT/steer-android-ext" $SRC tests/vless-stub.c)
+
+# Второй движок — для спек с via, пока via не влит в дерево STEER_DIR (ветка android-via).
+# STEER_VIA_DIR — дерево steer с via; не задано — via-спеки против движка стенд честно
+# помечает ожидающими (AwgTest.kt, pending), а проверки модели via идут всё равно.
+STEER_VIA=""
+if [ -n "${STEER_VIA_DIR:-}" ]; then
+    VSRC="src/steer.c src/spec.c src/dnsd.c src/failover.c src/aggregate.c src/obfs.c src/cli.c src/srs.c src/puff.c src/hwid.c src/ctl.c"
+    [ -f "$STEER_VIA_DIR/src/awg.c" ] && VSRC="$VSRC src/awg.c"
+    echo "logic-test: движок с via ($STEER_VIA_DIR)"
+    (cd "$STEER_VIA_DIR" && $CC -O2 -w -DSTEER_VERSION='"logic-test-via"' -DSTEER_ANDROID -DSTEER_EXTENDED \
+        -o "$OUT/steer-android-via" $VSRC tests/vless-stub.c)
+    STEER_VIA="$OUT/steer-android-via"
+fi
 
 echo "logic-test: эталон счёта узлов подписки"
 $CC -O1 -w -I"$STEER_DIR/src/ext" -o "$OUT/subcount" "$APP/tests/logic/subcount.c"
@@ -54,6 +71,6 @@ JVM_SRC="$(ls "$LOGIC"/*.kt | grep -v '/Background.kt$')"
 WORK="$(mktemp -d /tmp/logic-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 echo "logic-test: прогон"
-STEER_REAL_FILES="${STEER_REAL_FILES:-1}" STEER="$OUT/steer-android-ext" STEER_SRC="$STEER_DIR" LISTS_JSON="$LISTS_DIR/lists.json" \
+STEER_REAL_FILES="${STEER_REAL_FILES:-1}" STEER="$OUT/steer-android-ext" STEER_VIA="$STEER_VIA" STEER_SRC="$STEER_DIR" LISTS_JSON="$LISTS_DIR/lists.json" \
 SUBCOUNT="$OUT/subcount" WORK="$WORK" \
     java -cp "$OUT/logic-test.jar:$JSON_JAR" LogicTestKt
