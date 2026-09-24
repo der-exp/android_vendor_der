@@ -14,7 +14,10 @@
   lineage-23.2 (то, что мы не меняли).
 -->
 <manifest>
-  <remote name="github" fetch="https://github.com/" />
+  <!-- Своего remote здесь нет: локальный манифест пользуется remote «github» основного
+       манифеста DerpFest (fetch=".." от адреса манифеста, то есть https://github.com/).
+       Повторное объявление с другими атрибутами repo отвергает целиком: «remote github
+       already exists with different attributes» — и не синхронизирует ничего. -->
 
   <!-- Устройство и общая платформа sdm845. beryllium и sdm845-common взяты из der-exp:
        в beryllium добавлена строка nf_tables (BoardConfig), sdm845-common без изменений,
@@ -66,11 +69,10 @@
            name="der-exp/android_vendor_der"
            remote="github" revision="der-16.2" />
 
-  <!-- Движок steer. TODO: раскомментировать, когда Android-ветка steer (макрос STEER_ANDROID,
-       режим nft для ядра 4.9, Android.bp в корне) будет запушена в репозиторий движка. До тех
-       пор external/steer в дерево не входит, и der.mk не найдёт пакет steer при сборке.
+  <!-- Движок steer: ветка android репозитория движка (макрос STEER_ANDROID, режим nft для
+       ядра 4.9, Android.bp в корне). Репозиторий движка — не der-exp: он общий с роутерной
+       сборкой, и Android-правки идут туда же, отдельной веткой. -->
   <project path="external/steer"
            name="xyzmean/steer"
-           remote="github" revision="ЖДЁТ-ПУША-ANDROID-ВЕТКИ" />
-  -->
+           remote="github" revision="android" />
 </manifest>
