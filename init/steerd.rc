@@ -43,7 +43,12 @@ service steerd-apply /system_ext/bin/der/steer apply --spec /data/misc/steer/spe
 # на роутере (steer needs-dnsd отвечает «поднимать» всегда): перенаправление DNS стоит в
 # правилах всегда, и резолвер, к которому оно ведёт, обязан существовать вместе с ним.
 # Выходит он только при отказе — и тогда init перезапускает его, как любой не-oneshot сервис.
-service steerd-dnsd /system_ext/bin/der/steer dnsd --spec /data/misc/steer/spec.json
+#
+# --upstream-origdst: наверху у резолвера на телефоне никого нет (на 127.0.0.1:53 никто не
+# слушает), поэтому каждый запрос уходит к тому серверу, к которому шёл до заворота, — адрес
+# берётся из conntrack. Для раздачи это dnsmasq тетеринга, для приложений — серверы текущей
+# сети, которые знает только DnsResolver.
+service steerd-dnsd /system_ext/bin/der/steer dnsd --spec /data/misc/steer/spec.json --upstream-origdst
     class late_start
     user root
     group root net_admin net_raw inet
