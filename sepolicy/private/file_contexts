@@ -1,0 +1,13 @@
+# Метки файлов движка steer.
+#
+# Бинарники в /system_ext/bin. steer лежит в подкаталоге der/ (relative_install_path в
+# Android.bp), nft — рядом. Оба получают тип steerd_exec: nft исполняется в домене steerd
+# (см. steerd.te), поэтому его точка входа — тот же тип, что у самого движка.
+/system_ext/bin/der/steer     u:object_r:steerd_exec:s0
+/system_ext/bin/nft           u:object_r:steerd_exec:s0
+
+# Данные движка. Каталог и всё под ним — steerd_data_file. Управляющий сокет создаётся
+# демоном внутри этого каталога и получает тип steerd_socket отдельной строкой, чтобы права
+# splify2 можно было выдать ровно на сокет, а не на весь каталог.
+/data/misc/steer(/.*)?        u:object_r:steerd_data_file:s0
+/data/misc/steer/steer\.sock  u:object_r:steerd_socket:s0

@@ -1,0 +1,24 @@
+# Объявления типов домена steerd — в ПУБЛИЧНОЙ политике system_ext, потому что на них
+# ссылается не только сам демон, но и приложение splify2 (единственная разрешённая дверь к
+# движку). Публичная политика — это то, что видят другие домены; правила (allow/neverallow)
+# живут в приватной части, здесь только имена типов.
+
+# Домен самого демона. exec_type/file_type — чтобы бинарник мог быть точкой входа домена.
+type steerd, domain, coredomain;
+type steerd_exec, exec_type, file_type, system_file_type;
+
+# Данные движка в /data/misc/steer: спека, списки, снимок состояния, времянки. Свой тип, не
+# общий system_data_file, — именно это делает каталог недоступным чужим приложениям: у них
+# нет ни одного allow на steerd_data_file, а домен appdomain по умолчанию запрещает всё, на
+# что нет явного allow.
+type steerd_data_file, file_type, data_file_type, core_data_file_type;
+
+# Управляющий unix-сокет splify2 → steer. Отдельный тип, чтобы connectto мог быть разрешён
+# ровно одному домену (splify2_app) и запрещён всем прочим. Через TCP на 127.0.0.1 канал НЕ
+# идёт осознанно: локальный порт видит любое приложение, а сокет с меткой — только тот, кому
+# SELinux это позволил.
+type steerd_socket, file_type, data_file_type, core_data_file_type;
+
+# Свойство-выключатель persist.der.steer.enabled. Отдельный тип, чтобы писать его могли
+# только платформенные домены (init, splify2), а не любое приложение.
+type steerd_prop, property_type, core_property_type;

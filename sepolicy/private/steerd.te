@@ -1,0 +1,80 @@
+# Правила домена steerd — приватная политика system_ext.
+#
+# Задача домена двойная: (1) дать демону ровно те права, что нужны движку маршрутизации
+# поверх nftables, и ничего сверх; (2) сделать движок недоступным для всех приложений, кроме
+# splify2 — это прямое требование владельца («steer невидим для всех приложений, кроме
+# splify2»). Невидимость здесь означает не сокрытие процесса (его и так прячет hidepid=2 на
+# /proc у Android), а недоступность: у чужого приложения нет ни одного allow на наши типы, а
+# значит любое обращение к бинарнику, конфигу, сокету или процессу steerd — отказ на уровне
+# ядра.
+
+# Точка входа: запуск steerd_exec переводит процесс в домен steerd. init_daemon_domain даёт
+# домену право быть поднятым из init и базовые права демона.
+init_daemon_domain(steerd)
+
+# Базовые сетевые права домена (сокеты, resolv и т.п.) — тем же макросом, что у dnsmasq и
+# прочих сетевых демонов платформы.
+net_domain(steerd)
+
+# --- права, которые нужны движку ------------------------------------------------------
+
+# Возможности: NET_ADMIN — грузить правила nft, ставить ip rule/route, создавать TUN;
+# NET_RAW — сырые сокеты (пинг сторожа, разбор пакетов); NET_BIND_SERVICE — резолвер слушает
+# привилегированный порт, если так настроено (по умолчанию 5300, но право не лишнее).
+allow steerd self:global_capability_class_set { net_admin net_raw net_bind_service };
+
+# nfnetlink — этим движок и dnsd говорят с nf_tables (загрузка таблиц, добавление элементов
+# в наборы). Это ключевой сокет: без него нет ни apply, ни подмены адресов резолвером.
+allow steerd self:netlink_netfilter_socket { create bind write read setopt getopt };
+
+# netlink route — ip rule/route и чтение состояния интерфейсов сторожем.
+allow steerd self:netlink_route_socket { create bind write read setopt getopt nlmsg_read nlmsg_write };
+
+# Резолвер dnsd слушает UDP/TCP и ходит к апстриму. tun_socket + /dev/tun — для выходов,
+# которые поднимают свой туннель (vless/xsteer): движок сам создаёт TUN и привязывает к нему
+# таблицу маршрутизации.
+allow steerd self:{ udp_socket tcp_socket } { create bind connect read write setopt getopt getattr shutdown };
+allow steerd self:tun_socket { create };
+allow steerd tun_device:chr_file rw_file_perms;
+
+# nft вызывается движком как внешняя команда. Бинарник nft помечен steerd_exec (см.
+# file_contexts) и исполняется В ТОМ ЖЕ домене steerd (execute_no_trans): отдельный домен для
+# nft ничего не изолировал бы — nft делает ровно то, что ему поручил движок, и его права —
+# подмножество прав движка.
+allow steerd steerd_exec:file { read execute execute_no_trans open getattr };
+
+# ip вызывается движком (ip rule/route/link). ip лежит в /system/bin (тип system_file) и на
+# Android исполняется в домене вызывающего — разрешаем это явно.
+allow steerd system_file:file execute_no_trans;
+
+# Данные движка: спека, списки, снимок, сокет, времянки. Полный доступ в своём каталоге.
+allow steerd steerd_data_file:dir  create_dir_perms;
+allow steerd steerd_data_file:file create_file_perms;
+allow steerd steerd_data_file:sock_file { create setattr unlink getattr };
+allow steerd steerd_data_file:lnk_file { create read getattr unlink };
+
+# Свойство-выключатель демон читает (нужно ли работать) — писать его он не должен, пишут init
+# и splify2.
+get_prop(steerd, steerd_prop)
+
+# --- сокрытие движка от чужих приложений ---------------------------------------------
+#
+# Всё, что ниже, — гарантии, а не разрешения. domain по умолчанию не имеет доступа к нашим
+# типам; neverallow превращает это из «по умолчанию нет» в «нельзя добавить и потом», то есть
+# ловит будущую ошибку в политике на этапе сборки.
+
+# Процесс steerd недосягаем для приложений: ни трейснуть, ни послать сигнал, ни даже снять
+# атрибуты. splify2 исключён из запрета — с ним движок общается, но и ему процесс не нужен
+# (канал — сокет), поэтому по умолчанию не даём и ему; исключение оставлено на случай, если
+# splify2 понадобится, например, проверить, жив ли демон.
+neverallow { appdomain -splify2_app } steerd:process { ptrace signal sigkill sigstop getattr getsched };
+
+# Данные, бинарник и сокет движка недоступны любому приложению, кроме splify2. splify2 ходит
+# только в сокет (см. splify2_app.te), но не в файлы — ему хватает сокета.
+neverallow { appdomain -splify2_app } steerd_data_file:{ dir file } *;
+neverallow { appdomain -splify2_app } steerd_socket:sock_file ~getattr;
+neverallow { appdomain } steerd_exec:file { execute execute_no_trans };
+
+# Свойство-выключатель приложение писать не может — иначе любое приложение включало бы или
+# гасило движок.
+neverallow { appdomain -splify2_app } steerd_prop:property_service set;

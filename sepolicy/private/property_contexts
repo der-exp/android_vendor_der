@@ -1,0 +1,3 @@
+# Свойство-выключатель движка. Тип steerd_prop, чтобы писать его могли только init и splify2
+# (см. neverallow в steerd.te), а читать — демон.
+persist.der.steer.enabled    u:object_r:steerd_prop:s0
