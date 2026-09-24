@@ -1,8 +1,15 @@
 # Домен приложения splify2 — единственной двери к движку.
 #
 # Приложение ставится в system_ext/priv-app на платформенной подписи и попадает сюда по
-# seapp_contexts (имя пакета и seinfo=platform). Самого приложения под Android ещё нет (C1);
-# домен задан заранее, чтобы оно писалось под готовую политику, а не наоборот.
+# seapp_contexts (имя пакета и seinfo=platform). Само приложение — apps/Splify2 (договор частей
+# — apps/Splify2/BRIDGE.md); домен задан раньше него, и оно написано под эту политику.
+#
+# Сверх перечисленного ниже приложению ничего не понадобилось, и это проверено по тому, что
+# оно делает: настройки Private DNS (Settings.Global) пишет system_server по разрешению Android
+# WRITE_SECURE_SETTINGS, а не SELinux; JobScheduler, ConnectivityManager, PackageManager,
+# TelephonyManager (имя оператора: служба isub и свойства gsm.*, читаемые любым coredomain) —
+# службы app_api_service; WebView — как у любого приложения (app_domain); свои файлы —
+# app_data_file по seapp_contexts. Прочитать выключатель движка даёт set_prop (в нём get_prop).
 #
 # Образец — traceur_app: платформенное приложение в своём домене получает app_domain (всё, что
 # есть у любого приложения) и сверх него ровно то, что нужно для его дела, — а не весь набор

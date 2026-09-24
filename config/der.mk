@@ -15,7 +15,8 @@
 PRODUCT_PACKAGES += \
     steer \
     nft \
-    steerd.rc
+    steerd.rc \
+    Splify2
 
 # steer — расширенная сборка движка (клиент VLESS/Reality, xsteer, tgws; решение владельца —
 # сразу в первой версии). Ей нужен mbedtls 3.6 из external/der-mbedtls: копия AOSP в
@@ -23,6 +24,11 @@ PRODUCT_PACKAGES += \
 # steer ставится в /system_ext/bin/der/ (relative_install_path в Android.bp), nft — рядом в
 # /system_ext/bin. dnsd, сторож и снимок состояния — это тот же бинарник steer с разными
 # подкомандами, отдельных пакетов у них нет (как и на роутере).
+
+# Splify2 — приложение управления (apps/Splify2): system_ext/priv-app на платформенной подписи,
+# единственная дверь к движку. Белый список его привилегированных разрешений
+# (privapp_allowlist_com.der.splify2 → system_ext/etc/permissions) приходит сам — через required
+# модуля, отдельной строки здесь не нужно.
 
 # Политика SELinux для домена steerd (демон) и заготовки типов, которые будет использовать
 # приложение splify2. Кладётся в приватную и публичную политику system_ext: приватную видит
