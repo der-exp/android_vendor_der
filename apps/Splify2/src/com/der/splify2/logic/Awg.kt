@@ -85,7 +85,7 @@ internal object AwgConf {
         // Частые промахи — до построчного разбора: их причина не в строке, а в том, что вставлено
         // вовсе не то, и «строка 1: нет знака «=»» человеку ничего бы не сказало.
         if (t.startsWith("vpn://"))
-            throw BridgeError("bad-args", "Ключ vpn:// не подходит — выгрузите в AmneziaVPN настройки в формате AmneziaWG (файл .conf)")
+            throw BridgeError("bad-args", "Ключ vpn:// не подходит — выгрузите в AmneziaVPN настройки в формате AmneziaWG")
         if (t.startsWith("vless://") || t.startsWith("http://") || t.startsWith("https://"))
             throw BridgeError("bad-args", "Это ссылка, а не файл WireGuard — VLESS добавляется подпиской")
         if (t.lineSequence().none { trimC(it.substringBefore('#')).equals("[Interface]", ignoreCase = true) })
