@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Тексты, которые видит человек вне страницы: имя в лаунчере и имя файла резервной копии.
+     Всё остальное на экране пишет страница (web/). -->
+<resources>
+    <string name="app_name" translatable="false">splify2</string>
+    <!-- Предложенное имя файла в системном «Сохранить как»; %1$s — дата ГГГГ-ММ-ДД. -->
+    <string name="backup_file_name" translatable="false">splify2-%1$s.json</string>
+</resources>

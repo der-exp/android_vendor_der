@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Тема приложения. DayNight — ради тёмной темы страницы: WebView при targetSdk 33+ отдаёт
+  странице prefers-color-scheme по теме приложения (isLightTheme), а DayNight-тема светлая
+  или тёмная ровно по системной. Страница рисует обе темы сама; алгоритмическое затемнение
+  WebView выключено в MainActivity.
+
+  Окно рисуется под системными панелями (edge-to-edge — с targetSdk 35 иначе и нельзя):
+  отступы под панели страница получает CSS-переменными (MainActivity.applyInsets).
+-->
+<resources>
+    <style name="Theme.Splify2" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/page_background</item>
+        <item name="android:colorBackground">@color/page_background</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        <!-- Панели прозрачные поверх страницы; значки на них — тёмные в светлой
+             теме и светлые в тёмной (bools.xml в values и values-night). -->
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
+    </style>
+</resources>

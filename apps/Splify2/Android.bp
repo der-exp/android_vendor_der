@@ -1,0 +1,54 @@
+// Приложение splify2 под Android — экран управления движком steer (на роутере ту же роль
+// играют LuCI и rpcd). Договор частей — BRIDGE.md рядом.
+//
+// system_ext/priv-app на платформенной подписи (решение владельца, C2): домен splify2_app
+// назначается по seapp_contexts только пакету com.der.splify2 с seinfo=platform, а без этого
+// домена приложению не дойти до управляющего сокета движка. Платформенная подпись заодно даёт
+// сама все signature-разрешения, которые приложение просит (WRITE_SECURE_SETTINGS — для
+// Private DNS); белый список privapp ниже нужен для того, что privileged.
+//
+// Почему system_ext, а не product или system: там же движок и его политика (config/der.mk) —
+// splify2 и steer одна надстройка der-exp над платформой, и держать их в одном разделе проще,
+// чем объяснять, почему приложение отдельно от того, чем оно управляет.
+//
+// Только платформенный API, без androidx: оболочку можно собрать и проверить вне дерева
+// (tools/app-check/build.sh) против android.jar из SDK, и её поведение не зависит от версии
+// библиотек, которую подложит конкретное дерево. Вместо WebViewAssetLoader — свой
+// shouldInterceptRequest (WebAssets.kt), он же отдаёт значки приложений.
+//
+// Kotlin: Soong сам добавляет kotlin-stdlib в приложение статически, когда в srcs есть .kt;
+// проверочная сборка делает так же.
+android_app {
+    name: "Splify2",
+    srcs: ["src/**/*.kt"],
+    asset_dirs: ["assets"],
+    resource_dirs: ["res"],
+    manifest: "AndroidManifest.xml",
+
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    // Полный API платформы: android.os.SystemProperties (выключатель движка —
+    // persist.der.steer.enabled) скрыт от SDK. Soong ставит приложению usesNonSdkApi, и
+    // скрытый API ему открыт.
+    platform_apis: true,
+
+    required: ["privapp_allowlist_com.der.splify2"],
+
+    // R8 у android_app включён по умолчанию. Методы моста зовёт JavaScript по имени, их R8
+    // не видит вызванными — правила в proguard.flags.
+    optimize: {
+        proguard_flags_files: ["proguard.flags"],
+    },
+}
+
+// Белый список привилегированных разрешений. Для приложения в system_ext/priv-app он обязан
+// лежать в system_ext/etc/permissions — тот же раздел, что и приложение. Образец — Traceur
+// (privapp_whitelist_com.android.traceur).
+prebuilt_etc {
+    name: "privapp_allowlist_com.der.splify2",
+    src: "privapp-permissions-com.der.splify2.xml",
+    sub_dir: "permissions",
+    filename_from_src: true,
+    system_ext_specific: true,
+}

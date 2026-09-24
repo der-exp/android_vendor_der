@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Фон окна до того, как страница нарисовалась: тот же, что у страницы (токен surface-page
+     в @andromeda/ui), чтобы при запуске не мигало белым в тёмной теме и наоборот. -->
+<resources>
+    <color name="page_background">#f6f7f9</color>
+    <color name="accent">#5e72e4</color>
+    <color name="icon_background">#5e72e4</color>
+    <color name="icon_foreground">#ffffff</color>
+</resources>

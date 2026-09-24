@@ -1,0 +1,16 @@
+# Правила R8 для splify2.
+#
+# Методы с @JavascriptInterface зовёт страница по имени через WebView — для R8 они никем не
+# вызваны и без правила были бы выброшены или переименованы, а мост молча перестал бы
+# отвечать. Класс моста держим целиком с именами методов.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keepattributes JavascriptInterface
+
+# Компоненты из манифеста (Activity, JobService, Application) держат правила, которые aapt2
+# выводит из манифеста сам; здесь их повторять не нужно.
+
+# Kotlin stdlib ссылается на аннотации, которых в платформе нет; для исполнения они не нужны.
+-dontwarn org.jetbrains.annotations.**
+-dontwarn kotlin.**

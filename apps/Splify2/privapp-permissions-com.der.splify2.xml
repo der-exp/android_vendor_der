@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Привилегированные разрешения splify2 (system_ext/priv-app).
+
+  Здесь только разрешения с уровнем privileged. Обычные (INTERNET, ACCESS_NETWORK_STATE,
+  QUERY_ALL_PACKAGES, RECEIVE_BOOT_COMPLETED) даются любому приложению при установке, и в
+  белом списке им делать нечего.
+
+  WRITE_SECURE_SETTINGS — signature|privileged: платформенной подписью оно дано и без этого
+  файла, но запись оставлена нарочно. Если приложение когда-нибудь переедет на свою подпись
+  (mac_permissions.xml вместо seinfo=platform), без неё прошивка с
+  ro.control_privapp_permissions=enforce не загрузится, а так разрешение останется за ним.
+  Нужно оно для одного: оркестрации Private DNS (Settings.Global private_dns_mode,
+  private_dns_specifier, private_dns_default_mode) — см. PrivateDns.kt.
+-->
+<permissions>
+    <privapp-permissions package="com.der.splify2">
+        <permission name="android.permission.WRITE_SECURE_SETTINGS"/>
+    </privapp-permissions>
+</permissions>

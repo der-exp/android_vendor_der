@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Манифест splify2 под Android.
+
+  Имя пакета com.der.splify2 — то самое, к которому привязан домен splify2_app в
+  sepolicy/private/seapp_contexts. Меняется только вместе с ним: приложение с другим именем
+  окажется в platform_app и до движка не дойдёт.
+
+  minSdk/targetSdk и номер версии здесь не пишутся: Soong подставляет их при сборке из
+  платформы (platform_apis), проверочная сборка — флагами aapt2.
+
+  Батарея (требование владельца): ни одного постоянного сервиса, ни одного получателя
+  широковещательных событий. В фоне приложение появляется только по заданию JobScheduler раз
+  в сутки при сети — и сразу уходит. Смену сети слушает открытый экран, и только пока открыт.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.der.splify2">
+
+    <!-- Скачивание каталога списков и подписок (делает логика). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Тип и лимитность текущей сети для экрана и условия задания JobScheduler. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Все приложения телефона для каналов «на приложение»: с targetSdk 30 без этого
+         PackageManager показывает только часть. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- Задание JobScheduler с setPersisted(true) переживает перезагрузку только с этим
+         разрешением. Самого получателя BOOT_COMPLETED у приложения нет. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Оркестрация Private DNS: Settings.Global private_dns_*. signature|privileged — даётся
+         платформенной подписью; запись в privapp-permissions-com.der.splify2.xml. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+
+    <!--
+      allowBackup=false и правила извлечения без единого домена: в модели настроек лежат
+      ссылки подписок с ключами доступа, им не место ни в облачной копии, ни в переносе на
+      новый телефон. Резервную копию человек делает сам из экрана («Сохранить как»).
+    -->
+    <application
+        android:name=".Splify2App"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Splify2"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true">
+
+        <!--
+          Одна Activity: экран — веб-страница, навигация внутри неё. singleTask — второй
+          запуск из лаунчера возвращает тот же экран, а не открывает ещё один WebView.
+          configChanges: поворот и смена размера окна не пересоздают Activity — иначе WebView
+          перезагрузил бы страницу и потерял ответы моста в полёте. Смена темы (uiMode) —
+          пересоздаёт: так страница получает новую prefers-color-scheme от темы приложения.
+          Ориентация не задана — и портрет, и альбом.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Ежесуточное обновление списков и подписок: работу делает логика
+             (logic.Background.runDaily), служба только даёт ей поток и отпускает систему. -->
+        <service
+            android:name=".UpdateJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+    </application>
+</manifest>
