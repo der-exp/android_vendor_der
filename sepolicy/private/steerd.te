@@ -53,6 +53,12 @@ allow steerd steerd_exec:file { read execute execute_no_trans open getattr };
 # Android исполняется в домене вызывающего — разрешаем это явно.
 allow steerd system_file:file execute_no_trans;
 
+# Корни сертификатов для клиента VLESS/TLS (security=tls): движок склеивает каталог
+# /apex/com.android.conscrypt/cacerts (запасной — /system/etc/security/cacerts) в файл
+# своего состояния, потому что certverify читает хранилище одним файлом. Читать сами файлы
+# платформа разрешает любому домену (domain.te); листать каталог — нет, это право здесь.
+allow steerd system_security_cacerts_file:dir r_dir_perms;
+
 # Данные движка: спека, списки, снимок, сокет, времянки. Полный доступ в своём каталоге.
 allow steerd steerd_data_file:dir  create_dir_perms;
 allow steerd steerd_data_file:file create_file_perms;

@@ -7,11 +7,14 @@ and cflags written there, for aarch64-linux-android at a given API level. The
 goal is to know, without a 300 GB checkout, that the code compiles and links
 against bionic before the first real `m nft steer`.
 
-Understood module types: cc_defaults, cc_library_static, cc_binary. Other
-modules (license, package, prebuilt_etc, ...) are parsed and ignored.
-Understood properties: name, defaults, srcs, cflags, c_std, local_include_dirs,
-export_include_dirs, static_libs, whole_static_libs, shared_libs (ignored:
-bionic's libc/libm/libdl are implicit), system_ext_specific (reported only).
+Understood module types: cc_defaults, cc_library_static, cc_binary,
+cc_library_headers, filegroup. Other modules (license, package, prebuilt_etc,
+...) are parsed and ignored.
+Understood properties: name, defaults, srcs (with globs and ":filegroup"
+references), exclude_srcs, cflags, c_std, local_include_dirs,
+export_include_dirs, header_libs, export_header_lib_headers, static_libs,
+whole_static_libs, shared_libs (ignored: bionic's libc/libm/libdl are
+implicit), system_ext_specific, relative_install_path and stem (reported only).
 
 On top of the module's own cflags the compiler gets SOONG_CFLAGS below: an
 approximation of the global flags Soong adds for arm64 device code (see
@@ -26,6 +29,7 @@ Each DIR is a directory with an Android.bp; TARGET is a module name to build.
 """
 
 import argparse
+import glob
 import os
 import re
 import shlex
@@ -236,7 +240,32 @@ def main():
 
     def exported_includes(name):
         typ, props, d = resolved(name)
-        return [os.path.join(d, x) for x in props.get("export_include_dirs", [])]
+        inc = [os.path.join(d, x) for x in props.get("export_include_dirs", [])]
+        for h in props.get("export_header_lib_headers", []):
+            inc += exported_includes(h)
+        return inc
+
+    # srcs as Soong reads them: paths relative to the module directory, globs
+    # ("library/*.c", "**" too), and ":name" references to a filegroup, whose
+    # files stay relative to the filegroup's own directory. exclude_srcs is
+    # applied after expansion, the same way.
+    def expand(entries, d):
+        out = []
+        for e in entries:
+            if e.startswith(":"):
+                ftyp, fprops, fd = resolved(e[1:])
+                if ftyp != "filegroup":
+                    raise SystemExit(f"{e}: only filegroup references are handled")
+                out += expand_srcs(fprops, fd)
+            elif any(c in e for c in "*?["):
+                out += sorted(glob.glob(os.path.join(d, e), recursive=True))
+            else:
+                out.append(os.path.join(d, e))
+        return out
+
+    def expand_srcs(props, d):
+        excl = set(expand(props.get("exclude_srcs", []), d))
+        return [x for x in expand(props.get("srcs", []), d) if x not in excl]
 
     def run(cmd):
         if a.v:
@@ -258,7 +287,7 @@ def main():
                   for x in props.get("local_include_dirs", []) +
                   props.get("export_include_dirs", [])]
         flags += ["-I" + d]  # Soong adds the module directory itself
-        for dep in deps:
+        for dep in deps + props.get("header_libs", []):
             flags += ["-I" + x for x in exported_includes(dep)]
         flags += props.get("cflags", [])
         if a.werror:
@@ -266,11 +295,14 @@ def main():
         objdir = os.path.join(a.out, "obj", name)
         objs = []
         jobs = []
-        for s in props.get("srcs", []):
-            o = os.path.join(objdir, re.sub(r"\.c$", ".o", s))
+        for src in expand_srcs(props, d):
+            rel = os.path.relpath(src, d)
+            if rel.startswith(".."):          # a filegroup from another directory
+                rel = os.path.join("_fg", src.lstrip("/"))
+            o = os.path.join(objdir, re.sub(r"\.c$", ".o", rel))
             os.makedirs(os.path.dirname(o), exist_ok=True)
             objs.append(o)
-            jobs.append([cc] + flags + ["-c", os.path.join(d, s), "-o", o])
+            jobs.append([cc] + flags + ["-c", src, "-o", o])
         with ThreadPoolExecutor(a.j) as ex:
             for f in [ex.submit(run, j) for j in jobs]:
                 f.result()
@@ -307,7 +339,7 @@ def main():
             libs = [built[x]["lib"] for x in order]
             where = "system_ext" if props.get("system_ext_specific") else \
                     "vendor" if props.get("vendor") or props.get("soc_specific") else "system"
-            exe = os.path.join(a.out, name)
+            exe = os.path.join(a.out, props.get("stem", name))
             ld = [cc] + objs + ["-Wl,--start-group"] + libs + ["-Wl,--end-group"] + \
                 SOONG_LDFLAGS + (["-static"] if a.static else [])
             if a.static:
@@ -315,7 +347,8 @@ def main():
             run(ld + ["-o", exe])
             built[name] = {"objs": objs, "exe": exe}
             sub = props.get("relative_install_path")
-            print(f"{name}: {exe}  (installs to /{where}/bin{'/' + sub if sub else ''})")
+            print(f"{name}: {exe}  (installs to /{where}/bin{'/' + sub if sub else ''}"
+                  f"/{props.get('stem', name)})")
         else:
             raise SystemExit(f"{name}: module type {typ} is not handled")
         return built[name]

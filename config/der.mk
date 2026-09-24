@@ -17,6 +17,9 @@ PRODUCT_PACKAGES += \
     nft \
     steerd.rc
 
+# steer — расширенная сборка движка (клиент VLESS/Reality, xsteer, tgws; решение владельца —
+# сразу в первой версии). Ей нужен mbedtls 3.6 из external/der-mbedtls: копия AOSP в
+# external/mbedtls — 3.5.2 без модулей Soong. Базовая сборка без mbedtls — модуль steer_base.
 # steer ставится в /system_ext/bin/der/ (relative_install_path в Android.bp), nft — рядом в
 # /system_ext/bin. dnsd, сторож и снимок состояния — это тот же бинарник steer с разными
 # подкомандами, отдельных пакетов у них нет (как и на роутере).

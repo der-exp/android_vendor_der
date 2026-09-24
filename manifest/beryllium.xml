@@ -64,6 +64,12 @@
            name="der-exp/android_external_libmnl"
            remote="github" revision="der-16.2" />
 
+  <!-- Mbed TLS 3.6 LTS под расширенный движок steer (клиент VLESS/Reality). Свой путь
+       external/der-mbedtls: external/mbedtls занят копией AOSP 3.5.2 без модулей Soong. -->
+  <project path="external/der-mbedtls"
+           name="der-exp/android_external_mbedtls"
+           remote="github" revision="der-16.2" />
+
   <!-- Надстройка der-exp: der.mk, init-сервисы, SELinux-домен steerd. Подключается из
        device.mk устройства строкой $(call inherit-product, vendor/der/config/der.mk). -->
   <project path="vendor/der"
