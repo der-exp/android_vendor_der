@@ -1,0 +1,12 @@
+// Сервисы init движка steer. Модуль нужен потому, что config/der.mk просит пакет steerd.rc
+// в PRODUCT_PACKAGES: без модуля с этим именем сборка продукта останавливается на «requested
+// but not defined», а сам файл в образ не попадает.
+//
+// system_ext, как и движок: rc лежит рядом с бинарником, который он запускает, и init читает
+// /system_ext/etc/init так же, как /system/etc/init.
+prebuilt_etc {
+    name: "steerd.rc",
+    src: "steerd.rc",
+    relative_install_path: "init",
+    system_ext_specific: true,
+}

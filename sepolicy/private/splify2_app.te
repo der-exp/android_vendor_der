@@ -20,6 +20,8 @@ net_domain(splify2_app)
 # ничего не нужно — ни файлы, ни процесс. Через этот сокет идут команды (применить спеку,
 # перечитать стратегии) и чтение снимка состояния.
 allow splify2_app steerd_socket:sock_file { read write getattr };
+# Дойти до сокета: /data/misc обходит любой домен (domain.te), а каталог движка — только мы.
+allow splify2_app steerd_data_file:dir search;
 allow splify2_app steerd:unix_stream_socket connectto;
 
 # Приложение — обычное untrusted-совместимое по правам, кроме этой одной двери. Всё остальное

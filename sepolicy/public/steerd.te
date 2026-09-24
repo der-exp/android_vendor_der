@@ -21,4 +21,10 @@ type steerd_socket, file_type, data_file_type, core_data_file_type;
 
 # Свойство-выключатель persist.der.steer.enabled. Отдельный тип, чтобы писать его могли
 # только платформенные домены (init, splify2), а не любое приложение.
-type steerd_prop, property_type, core_property_type;
+#
+# Макросом system_internal_prop, а не голым «property_type, core_property_type»: второе —
+# атрибут прежних свойств, которые читает КАЖДЫЙ домен (property.te раздаёт core_property_type
+# на чтение всем), и платформа запрещает заводить новые типы с ним (neverallow в
+# private/property.te). system_internal — свойство системного раздела, которое вендору не
+# видно вовсе: нашему выключателю больше и не нужно.
+system_internal_prop(steerd_prop)

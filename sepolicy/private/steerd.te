@@ -8,6 +8,12 @@
 # значит любое обращение к бинарнику, конфигу, сокету или процессу steerd — отказ на уровне
 # ядра.
 
+# Каталог /system_ext/bin/der, где лежит движок. Тип приватный: на него не ссылается никто,
+# кроме этой политики. Приложениям платформа разрешает обходить только system_file
+# (app.te: system_file:dir r_dir_perms), поэтому каталог со своим типом для них закрыт:
+# имя der в /system_ext/bin видно, а что внутри и какие у файла атрибуты — нет.
+type steerd_bin_dir, file_type, system_file_type;
+
 # Точка входа: запуск steerd_exec переводит процесс в домен steerd. init_daemon_domain даёт
 # домену право быть поднятым из init и базовые права демона.
 init_daemon_domain(steerd)
@@ -50,8 +56,19 @@ allow steerd system_file:file execute_no_trans;
 # Данные движка: спека, списки, снимок, сокет, времянки. Полный доступ в своём каталоге.
 allow steerd steerd_data_file:dir  create_dir_perms;
 allow steerd steerd_data_file:file create_file_perms;
-allow steerd steerd_data_file:sock_file { create setattr unlink getattr };
 allow steerd steerd_data_file:lnk_file { create read getattr unlink };
+
+# Управляющий сокет. Файл сокета, созданный процессом, получает тип КАТАЛОГА, в котором
+# создан, а не тот, что написан в file_contexts: file_contexts применяет restorecon, а
+# сокет появляется уже после него, при каждом старте демона. Без перехода ниже сокет
+# родился бы steerd_data_file — и splify2, которому разрешён ровно steerd_socket, получил
+# бы отказ, а разрешать ему весь каталог данных значило бы сломать запрет ниже.
+type_transition steerd steerd_data_file:sock_file steerd_socket "steer.sock";
+allow steerd steerd_socket:sock_file { create setattr unlink getattr };
+
+# Каталог /system_ext/bin/der — свой тип (см. file_contexts): его могут обходить только init
+# (запуск сервиса) и сам демон.
+allow { init steerd } steerd_bin_dir:dir r_dir_perms;
 
 # Свойство-выключатель демон читает (нужно ли работать) — писать его он не должен, пишут init
 # и splify2.
@@ -67,13 +84,19 @@ get_prop(steerd, steerd_prop)
 # атрибуты. splify2 исключён из запрета — с ним движок общается, но и ему процесс не нужен
 # (канал — сокет), поэтому по умолчанию не даём и ему; исключение оставлено на случай, если
 # splify2 понадобится, например, проверить, жив ли демон.
-neverallow { appdomain -splify2_app } steerd:process { ptrace signal sigkill sigstop getattr getsched };
+#
+# shell из запрета исключён. Это adb shell: платформа даёт ему getattr на процесс любого
+# домена (так работает `ps -A`), и запрет без исключения ломал сборку политики. Отнимать это
+# у adb shell — правка платформенной политики ради отладочного входа, который у человека и так
+# есть только при включённой отладке по USB; приложения сюда не входят.
+neverallow { appdomain -splify2_app -shell } steerd:process { ptrace signal sigkill sigstop getattr getsched };
 
 # Данные, бинарник и сокет движка недоступны любому приложению, кроме splify2. splify2 ходит
 # только в сокет (см. splify2_app.te), но не в файлы — ему хватает сокета.
 neverallow { appdomain -splify2_app } steerd_data_file:{ dir file } *;
 neverallow { appdomain -splify2_app } steerd_socket:sock_file ~getattr;
 neverallow { appdomain } steerd_exec:file { execute execute_no_trans };
+neverallow { appdomain } steerd_bin_dir:dir { search read open };
 
 # Свойство-выключатель приложение писать не может — иначе любое приложение включало бы или
 # гасило движок.
