@@ -40,11 +40,12 @@
            name="LineageOS/android_hardware_xiaomi"
            remote="github" revision="lineage-23.2" />
 
-  <!-- Проприетарные блобы. TheMuppets публикует их по веткам LineageOS. ВНИМАНИЕ: ветка
-       блобов должна соответствовать версии ROM; на момент подготовки для beryllium последняя
-       ветка TheMuppets — lineage-22.2. Если сборка DerpFest 16.2 (база 23.2) потребует блобов
-       новее, их придётся взять с рабочего устройства (extract-files) — это отдельный шаг,
-       железозависимый, и здесь его не автоматизировать. -->
+  <!-- Проприетарные блобы — ветка lineage-22.2 TheMuppets: новее для beryllium и sdm845-common
+       её нет (23.x не публиковали). Подходит она к деревьям lineage-23.2 не на веру: у
+       LineageOS в 22.2 и 23.2 обоих деревьев proprietary-files.txt (302 и 724 строки, с
+       хэшами), extract-files.py и setup-makefiles.py совпадают побайтно, то есть 23.2 извлекла бы
+       те же файлы с теми же правками. Непроверенным остаётся одно — примет ли сборка 23.2
+       сгенерированные в 22.2 Android.bp/mk; это покажет первая сборка. -->
   <project path="vendor/xiaomi/beryllium"
            name="TheMuppets/proprietary_vendor_xiaomi_beryllium"
            remote="github" revision="lineage-22.2" />
