@@ -1,7 +1,8 @@
 // Оболочка: одна на процесс, живёт в Splify2App. Держит всё, что переживает экран, — клиент
 // движка, пул потоков моста, логику, оркестрацию Private DNS — и разводит вызовы моста по
 // владельцам (BRIDGE.md, «Методы»): engine, system, apps — здесь; settings, spec, lists, subs,
-// backup — в logic.Dispatcher.
+// backup, outputs — в logic.Dispatcher (outputs.pickAwg — системное окно выбора файла — у
+// MainActivity: окну нужна Activity).
 //
 // Почему на процесс, а не на Activity: вызов моста может идти долго (apply — до семи минут,
 // проба узлов — до трёх), а Activity пересоздаётся сменой темы. Работа при этом не должна
@@ -292,7 +293,7 @@ class Shell(val app: Context) {
         const val E_IO = "io"
         const val E_INTERNAL = "internal"
 
-        private val LOGIC_GROUPS = setOf("settings", "spec", "lists", "subs", "backup")
+        private val LOGIC_GROUPS = setOf("settings", "spec", "lists", "subs", "backup", "outputs")
 
         fun lastLine(s: String): String? =
             s.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }

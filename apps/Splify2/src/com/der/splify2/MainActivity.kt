@@ -35,6 +35,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -79,9 +80,11 @@ class MainActivity : Activity() {
 
     private var fileChooser: ValueCallback<Array<Uri>>? = null
     private val pendingSaves = HashMap<Int, PendingSave>()
+    private val pendingPicks = HashMap<Int, PendingPick>()
     private var nextRequest = RC_SAVE_FIRST
 
     private class PendingSave(val id: String, val file: File, val result: String)
+    private class PendingPick(val id: String, val args: JSONObject)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -226,6 +229,16 @@ class MainActivity : Activity() {
                 exportBackup(id, argsJson)
                 return
             }
+            if (method == "outputs.pickAwg") {
+                val args = try {
+                    JSONObject(argsJson?.takeIf { it.isNotBlank() && it != "null" } ?: "{}")
+                } catch (_: Exception) {
+                    deliver(id, errorReply(Shell.E_BAD_ARGS, "Неверные данные запроса"))
+                    return
+                }
+                main.post { startPick(id, args) }
+                return
+            }
             shell.pool.execute { deliver(id, shell.reply(method, argsJson)) }
         }
     }
@@ -306,10 +319,91 @@ class MainActivity : Activity() {
         }
     }
 
+    // --- файл WireGuard: «Открыть» -----------------------------------------------------
+
+    /**
+     * outputs.pickAwg {name?}: системное окно «Открыть» → текст файла → outputs.importAwg логики
+     * (BRIDGE.md). Окно, а не разрешение на хранилище, по той же причине, что у «Сохранить как»:
+     * ACTION_OPEN_DOCUMENT даёт доступ ровно к одному выбранному файлу и ничего не просит.
+     *
+     * Типы — не только текстовые: у расширения .conf в Android нет своего типа, и провайдер
+     * документов отдаёт такой файл как application/octet-stream; с одними текстовыми окно показало
+     * бы файл WireGuard серым. Ответ странице — результат importAwg с `picked: true` и именем
+     * файла (из него экран предлагает имя выхода) или `{"picked": false}`, если окно закрыли.
+     */
+    private fun startPick(id: String, args: JSONObject) {
+        if (isDestroyed) return
+        val rc = nextRequest++
+        pendingPicks[rc] = PendingPick(id, args)
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/*", "application/octet-stream"))
+        try {
+            startActivityForResult(intent, rc)
+        } catch (e: ActivityNotFoundException) {
+            pendingPicks.remove(rc)
+            deliver(id, errorReply(Shell.E_IO, "Нет приложения для выбора файлов"))
+        }
+    }
+
+    private fun finishPick(p: PendingPick, resultCode: Int, uri: Uri?) {
+        if (resultCode != RESULT_OK || uri == null) {
+            deliver(p.id, okReply("{\"picked\":false}"))
+            return
+        }
+        shell.pool.execute {
+            val reply = try {
+                val bytes = contentResolver.openInputStream(uri)?.use { readCapped(it, AWG_MAX_BYTES + 1) }
+                    ?: throw IOException("нет потока")
+                if (bytes.size > AWG_MAX_BYTES) {
+                    errorReply(Shell.E_BAD_ARGS, "Файл слишком большой для настроек WireGuard")
+                } else {
+                    val name = displayName(uri)
+                    val args = JSONObject(p.args.toString()).put("text", String(bytes, Charsets.UTF_8))
+                    val r = JSONObject(shell.reply("outputs.importAwg", args.toString()))
+                    if (r.optBoolean("ok")) {
+                        val res = r.getJSONObject("result").put("picked", true)
+                        if (name != null) res.put("file", name)
+                        okReply(res.toString())
+                    } else r.toString()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "файл WireGuard не прочитан", e)
+                errorReply(Shell.E_IO, "Не удалось прочитать файл")
+            }
+            deliver(p.id, reply)
+        }
+    }
+
+    private fun readCapped(input: java.io.InputStream, cap: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        while (out.size() < cap) {
+            val n = input.read(buf, 0, minOf(buf.size, cap - out.size()))
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    /** Имя файла, как его показывает провайдер документов; не сказал — null. */
+    private fun displayName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == RC_FILE_CHOOSER) {
             fileChooser?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
             fileChooser = null
+            return
+        }
+        pendingPicks.remove(requestCode)?.let {
+            finishPick(it, resultCode, data?.data)
             return
         }
         val p = pendingSaves.remove(requestCode) ?: return
@@ -420,5 +514,7 @@ class MainActivity : Activity() {
         const val TAG = "splify2"
         const val RC_FILE_CHOOSER = 1
         const val RC_SAVE_FIRST = 100
+        /** Предел логики и движка: больше законный файл WireGuard не бывает. */
+        const val AWG_MAX_BYTES = com.der.splify2.logic.AwgConf.MAX_BYTES
     }
 }
