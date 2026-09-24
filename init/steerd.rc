@@ -56,6 +56,19 @@ service steerd-dnsd /system_ext/bin/der/steer dnsd --spec /data/misc/steer/spec.
     seclabel u:r:steerd:s0
     disabled
 
+# Помощники выходов со своим процессом: клиент VLESS/Reality, xsteer, обфускатор, мост
+# Telegram. Их состав зависит от спеки, а сервисы init объявлены статически, поэтому держит их
+# один сервис — `steer supervise` (перезапуск упавшего через 5 с, падающего сразу — с растущей
+# паузой до 5 минут; SIGHUP — сверить состав со спекой). Помощники исполняются в том же домене
+# steerd, что и движок.
+service steerd-outputs /system_ext/bin/der/steer supervise --spec /data/misc/steer/spec.json
+    class late_start
+    user root
+    group root net_admin net_raw inet
+    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
+    seclabel u:r:steerd:s0
+    disabled
+
 # Сторож устройств. На роутере это `while :; do steer failover; sleep 60; done` отдельным
 # экземпляром procd. Здесь круг крутит сам движок (`--loop 60`): у init нет строки shell, а
 # выдать домену steerd /system/bin/sh значило бы разрешить ему любую команду. Каждый проход —
@@ -96,6 +109,7 @@ service steerd-down /system_ext/bin/der/steer down --state-dir /data/misc/steer/
 # сторож работают уже поверх них. apply — oneshot, поэтому запускается первым и завершается,
 # остальные встают следом.
 on property:persist.der.steer.enabled=1
+    start steerd-outputs
     start steerd-apply
     start steerd-dnsd
     start steerd-failover
@@ -108,14 +122,9 @@ on property:persist.der.steer.enabled=1
 on property:persist.der.steer.enabled=0
     stop steerd-failover
     stop steerd-dnsd
+    stop steerd-outputs
     start steerd-down
 
-# TODO (следующий этап, требует решения владельца и mbedtls в дереве):
-#   * помощники выходов kind=vless/xsteer/obfs/zapret/tgws. Они спека-зависимы (по одному на
-#     выход) и создают TUN до apply. В init.rc их статически не объявить — нужен launcher
-#     (oneshot-сервис со скриптом, который читает `steer outputs` и поднимает помощников как
-#     дочерние процессы под тем же доменом steerd). Пока не сделано: базовый режим
-#     (маршрутизация доменов/адресов в уже поднятый туннель WireGuard) в них не нуждается.
-#   * дедицированный uid AID_STEER вместо root. Сейчас демон root, но заперт доменом steerd;
-#     на Android изоляцию даёт домен, а не uid, поэтому это улучшение, а не обязательное
-#     условие. Заводить AID — правка android_filesystem_config.h, отдельным коммитом.
+# Дальше (не сделано): выделенный uid AID_STEER вместо root. Сейчас демон root, но заперт
+# доменом steerd; на Android изоляцию даёт домен, а не uid, поэтому это улучшение, а не
+# обязательное условие. Правка android_filesystem_config.h, отдельным коммитом.
