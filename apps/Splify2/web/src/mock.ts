@@ -1,23 +1,24 @@
 /**
  * Заглушка оболочки: отвечает на все методы BRIDGE.md правдоподобными данными, когда
- * страница открыта без приложения (`npm run dev`, просмотр сборки в браузере).
+ * страница открыта без приложения (`npm run dev`, просмотр сборки в браузере, снимки
+ * scripts/shots.mjs).
  *
- * Отвечает тем же путём, что настоящая оболочка, — через `__splifyReply` с задержкой, —
- * чтобы экраны проходили через ожидание так же, как на телефоне. Форма `engine.status`
- * повторяет `steer status` (как у splify2 на роутере); `engine.conns` и `engine.dnsLog`
- * отвечают `unknown-method`, как ответит оболочка, пока у сокета нет этих команд.
+ * Формы — те, что отдают настоящие части: модель и методы логики — как logic/Dispatcher.kt
+ * (settings.put принимает часть модели, подписки меняются только через subs.*), движок — как
+ * его команды (conns, dns-log, vless-probe — steer/docs/ctl.md). Отвечает тем же путём, что
+ * оболочка, — через `__splifyReply` с задержкой, — чтобы экраны проходили через ожидание так
+ * же, как на телефоне.
  *
- * Переключатели в адресе страницы — для проверки состояний, которых на исправной
- * заглушке не бывает:
- *   ?conns=1        — соединения и журнал имён с данными (будущая форма ответа)
- *   ?apply=fail     — spec.apply не применяется и откатывается
+ * Переключатели в адресе страницы — для состояний, которых на исправной заглушке не бывает:
+ *   ?conns=0        — движок без команд conns и dns-log (unknown-method)
+ *   ?apply=fail     — spec.apply: движок отверг новые правила, остались прежние
  *   ?engine=down    — сокет движка не отвечает
  */
 import type {
   AppInfo,
   BridgeReply,
   Catalog,
-  CatalogEntry,
+  CatalogItem,
   CustomList,
   EngineState,
   Model,
@@ -41,10 +42,26 @@ let subs: Sub[] = [
   {
     id: "s1",
     name: "Мой VPN",
+    kind: "url",
     url: "https://sub.example.net/api/sub/7f3a9c1e2b",
     nodes: 5,
     updated: now() - 3 * 3600,
-    quota: { up: 1.2 * GB, down: 18.4 * GB, total: 100 * GB, expire: now() + 19 * 86400 },
+    skipped: 2,
+    foreign: 0,
+    used_by: ["vless-nl"],
+    hwid: "3f9a0c1e2b7d4a5c6e8f",
+    quota: { up: String(1.2 * GB), down: String(18.4 * GB), total: String(100 * GB), expire: now() + 19 * 86400 },
+  },
+  {
+    id: "s2",
+    name: "Свои ссылки",
+    kind: "links",
+    nodes: 1,
+    updated: now() - 9 * 86400,
+    skipped: 0,
+    foreign: 0,
+    used_by: [],
+    hwid: "3f9a0c1e2b7d4a5c6e8f",
   },
 ]
 
@@ -57,41 +74,65 @@ const nodes: VlessNode[] = [
 ]
 
 let model: Model = {
-  outputs: {
-    "vless-nl": { name: "vless-nl", kind: "vless", title: "Нидерланды", sub: "s1", nodes: [2, 0], on_fail: "drop" },
-    "wg-home": { name: "wg-home", kind: "interface", title: "свой WireGuard", devices: ["wg0"], on_fail: "direct" },
-    direct: { name: "direct", kind: "direct", title: "без туннеля" },
-  },
-  channels: [
-    { name: "Банки напрямую", enabled: true, who: "apps", uids: [10123, 10145], match: { any: true }, out: "direct" },
-    { name: "YouTube", enabled: true, who: "phone", match: { lists: ["youtube"] }, out: "vless-nl" },
-    { name: "Telegram", enabled: true, who: "phone", match: { lists: ["telegram", "telegram-ip"] }, out: "vless-nl" },
-    { name: "Discord", enabled: true, who: "phone", match: { lists: ["discord"] }, out: "vless-nl" },
-    { name: "Работа", enabled: true, who: "apps", uids: [10201], match: { custom: ["работа"] }, out: "vless-nl" },
-    { name: "Раздача через VPN", enabled: false, who: "tether", match: { any: true }, out: "vless-nl" },
+  version: 1,
+  outputs: [
+    { name: "vless-nl", kind: "vless", sub: "s1", nodes: [2, 0], on_fail: "drop" },
+    { name: "wg-home", kind: "interface", devices: ["wg0"], on_fail: "direct" },
   ],
+  channels: [
+    { name: "Банки напрямую", enabled: true, who: { kind: "apps", uids: [10123, 10145] }, what: { lists: [], custom: [], all: true }, out: "direct" },
+    { name: "YouTube", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:youtube"], custom: [], all: false }, out: "vless-nl" },
+    { name: "Telegram", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:telegram"], custom: [], all: false }, out: "vless-nl" },
+    { name: "Discord", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:discord"], custom: [], all: false }, out: "vless-nl" },
+    { name: "Работа", enabled: true, who: { kind: "apps", uids: [10201] }, what: { lists: [], custom: ["work"], all: false }, out: "wg-home" },
+    { name: "Раздача через VPN", enabled: false, who: { kind: "tether", from: [] }, what: { lists: [], custom: [], all: true }, out: "vless-nl" },
+  ],
+  lists: ["itdoginfo:youtube", "itdoginfo:telegram", "itdoginfo:discord"],
+  custom: [{ name: "work", domains: ["gitlab.work.example", "jira.work.example"], prefixes: ["10.20.0.0/16"] }],
+  subs: [
+    { id: "s1", name: "Мой VPN", kind: "url", url: "https://sub.example.net/api/sub/7f3a9c1e2b" },
+    { id: "s2", name: "Свои ссылки", kind: "links" },
+  ],
+  tether: { devices: ["rndis0", "ncm0", "softap0", "ap0", "swlan0", "bt-pan"] },
+  catalog_url: null,
+  update: { unmetered_only: true },
 }
 
 const privateDns: PrivateDns = { mode: "off", managed: true, saved: { mode: "hostname", host: "dns.adguard-dns.com" } }
 
-const catalog: CatalogEntry[] = [
-  { id: "youtube", name: "YouTube", category: "Видео", kind: "domains", count: 1284, description: "YouTube и его сети доставки", selected: true },
-  { id: "twitch", name: "Twitch", category: "Видео", kind: "domains", count: 96, selected: false },
-  { id: "telegram", name: "Telegram", category: "Мессенджеры", kind: "domains", count: 312, selected: true },
-  { id: "telegram-ip", name: "Telegram · адреса", category: "Мессенджеры", kind: "prefixes", count: 18, selected: true },
-  { id: "whatsapp", name: "WhatsApp", category: "Мессенджеры", kind: "domains", count: 74, selected: false },
-  { id: "discord", name: "Discord", category: "Мессенджеры", kind: "domains", count: 420, description: "голос и текст", selected: true },
-  { id: "instagram", name: "Instagram", category: "Соцсети", kind: "domains", count: 210, selected: false },
-  { id: "facebook", name: "Facebook", category: "Соцсети", kind: "domains", count: 388, selected: false },
-  { id: "x", name: "X", category: "Соцсети", kind: "domains", count: 142, selected: false },
-  { id: "chatgpt", name: "ChatGPT", category: "Нейросети", kind: "domains", count: 58, selected: false },
-  { id: "gemini", name: "Gemini", category: "Нейросети", kind: "domains", count: 33, selected: false },
-  { id: "ru-blocked", name: "Заблокированные в России", category: "Общие", kind: "domains", count: 84312, description: "сводный список недоступных сайтов", selected: false },
-].map((e) => ({ ...e, kind: e.kind as "domains" | "prefixes", updated: now() - 5 * 3600 }))
+const IT = "itdoginfo (allow-domains)"
+const GEO = "b4geoip (игры и сервисы)"
+const catalog: CatalogItem[] = (
+  [
+    ["itdoginfo:youtube", "YouTube", IT, ["domains"], 1284],
+    ["itdoginfo:telegram", "Telegram", IT, ["prefixes", "domains"], 330],
+    ["itdoginfo:discord", "Discord", IT, ["prefixes", "domains"], 420],
+    ["itdoginfo:meta", "Meta", IT, ["prefixes", "domains"], 598],
+    ["itdoginfo:twitter", "X (Twitter)", IT, ["prefixes", "domains"], 142],
+    ["itdoginfo:cloudflare", "Cloudflare", IT, ["prefixes"], undefined],
+    ["itdoginfo:anime", "Аниме", IT, ["domains"], undefined],
+    ["b4geoip:steam", "Steam", GEO, ["prefixes", "domains"], 1210],
+    ["b4geoip:riot", "Riot Games", GEO, ["prefixes", "domains"], 86],
+    ["mydyson", "MyDyson", undefined, ["domains"], 1],
+  ] as [string, string, string | undefined, ("domains" | "prefixes")[], number | undefined][]
+).map(([id, name, source, kinds, count]) => {
+  const selected = model.lists.includes(id)
+  return {
+    id,
+    name,
+    source,
+    kinds,
+    count,
+    default_on: false,
+    selected,
+    used: model.channels.some((c) => c.what.lists.includes(id)),
+    ...(selected ? { downloaded: { count: count ?? 212, updated: now() - 5 * 3600 } } : {}),
+    ...(id === "mydyson" ? { description: "Приложение MyDyson и сайт Dyson — из РФ не открываются" } : {}),
+    ...(id === "itdoginfo:discord" ? { narrow: { proto: "udp", ports: ["50000-65535"] } } : {}),
+  }
+})
 
-let custom: CustomList[] = [
-  { name: "работа", domains: ["gitlab.work.example", "jira.work.example"], prefixes: ["10.20.0.0/16"] },
-]
+let lastUpdate: Catalog["last_update"] = { ok: true, changed: 0, at: now() - 5 * 3600 }
 
 const apps: AppInfo[] = [
   { uid: 10201, pkg: "com.android.chrome", label: "Chrome", system: false, shared: [] },
@@ -109,13 +150,13 @@ const apps: AppInfo[] = [
 ]
 
 function status(): Status {
-  const outs: Status["outputs"] = {}
-  for (const o of Object.values(model.outputs)) {
+  const outs: Status["outputs"] = { direct: { name: "direct", kind: "direct", up: true } }
+  for (const o of model.outputs) {
     outs[o.name] = {
       name: o.name,
       kind: o.kind,
-      up: o.kind !== "interface",
-      device: o.kind === "vless" ? "tun-vless0" : o.devices?.[0],
+      up: true,
+      device: o.kind === "vless" ? "tun-vless-nl" : o.devices?.[0],
       devices: o.devices,
       on_fail: o.on_fail,
       nodes: o.kind === "vless" ? o.nodes ?? [] : undefined,
@@ -147,7 +188,19 @@ function status(): Status {
 }
 
 function catalogReply(): Catalog {
-  return { lists: catalog, updated: now() - 5 * 3600 }
+  for (const e of catalog) {
+    e.selected = model.lists.includes(e.id)
+    e.used = model.channels.some((c) => c.what.lists.includes(e.id))
+  }
+  return { version: "2026-09-23_08-32", updated: now() - 5 * 3600, last_update: lastUpdate, items: structuredClone(catalog) }
+}
+
+function customReply(): CustomList[] {
+  return model.custom.map((c) => ({ ...c, used: model.channels.some((ch) => ch.what.custom.includes(c.name)) }))
+}
+
+function subsReply(): Sub[] {
+  return subs.map((s) => ({ ...s, used_by: model.outputs.filter((o) => o.sub === s.id).map((o) => o.name) }))
 }
 
 type Emit = (name: string, payload: unknown) => void
@@ -163,8 +216,11 @@ class Fail extends Error {
 }
 
 function needEngine() {
-  if (!engine.reachable) throw new Fail("engine-down", "Движок не отвечает")
+  if (!engine.reachable) throw new Fail("engine-down", "Движок не отвечает — включите его или перезагрузите телефон")
 }
+
+const PREFIX = /^(\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?|[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?)$/i
+const DOMAIN = /^(\*\.)?([a-z0-9-]+\.)+[a-z0-9-]{2,}$/i
 
 async function run(method: string, args: Record<string, any>, emit: Emit): Promise<unknown> {
   switch (method) {
@@ -184,8 +240,8 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
       await delay(600)
       return {
         checks: [
-          { id: "outputs", verdict: "ok", what: "выходы: 2 из 3 работают", why: "" },
-          { id: "lists-age", verdict: "warn", what: "список discord старше суток", why: "не скачивался 31 ч" },
+          { id: "outputs", verdict: "ok", what: "выходы: 2 из 2 работают", why: "" },
+          { id: "lists-age", verdict: "warn", what: "список Discord старше суток", why: "не скачивался 31 ч" },
           { id: "dns", verdict: "ok", what: "резолвер отвечает", why: "" },
         ],
         warn: 1,
@@ -194,13 +250,13 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
     case "engine.explain": {
       needEngine()
       await delay(300)
-      const q = String(args.q || "").trim()
-      if (!q) throw new Fail("bad-args", "Нужен адрес или имя")
-      const yt = /youtube|googlevideo|ytimg/.test(q)
+      const s = String(args.q || "").trim()
+      if (!s) throw new Fail("bad-args", "Нужен адрес или имя")
+      const yt = /youtube|googlevideo|ytimg/.test(s)
       return {
         text: yt
-          ? `${q}\n  правило: YouTube (список youtube)\n  выход:   vless-nl · tun-vless0 · узел 3 NL · Амстердам 2`
-          : `${q}\n  ни одно правило не совпало\n  выход:   напрямую`,
+          ? `${s}\n  правило: YouTube (список youtube)\n  выход:   vless-nl · tun-vless-nl · узел 3 NL · Амстердам 2`
+          : `${s}\n  ни одно правило не совпало\n  выход:   напрямую`,
       }
     }
     case "engine.vlessNodes":
@@ -208,14 +264,14 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
       await delay(250)
       return {
         output: args.out,
-        sub_file: "/data/misc/steer/lists/sub-s1.txt",
+        sub_file: "/data/misc/steer/lists/sub-s1-0a1b2c3d.txt",
         node: -1,
-        chosen: model.outputs[args.out]?.nodes ?? [],
+        chosen: model.outputs.find((o) => o.name === args.out)?.nodes ?? [],
         usable: nodes.length,
         skipped: 2,
         foreign: 0,
         nodes,
-        skipped_reasons: [{ reason: "shadowsocks не поддерживается", count: 2, example: "SS · Стамбул" }],
+        skipped_reasons: [{ reason: "tls по адресу без sni: нечем сверить", count: 2, example: "SS · Стамбул" }],
       }
     case "engine.vlessProbe": {
       needEngine()
@@ -223,7 +279,7 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
       const ms = [182, 96, 141, 268, 0]
       return {
         output: args.out,
-        working: 4,
+        sub_file: "/data/misc/steer/lists/sub-s1-0a1b2c3d.txt",
         results: nodes.map((n, i) => ({
           index: n.index,
           name: n.name,
@@ -233,26 +289,40 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
           ttfb_ms: ms[i],
           why: ms[i] ? "" : "нет ответа за 8 с",
         })),
+        working: 4,
       }
     }
     case "engine.conns":
-      if (q.get("conns") !== "1") throw new Fail("unknown-method")
+      needEngine()
+      if (q.get("conns") === "0") throw new Fail("unknown-method", "Недоступно в этой версии системы")
       return {
+        schema: 1,
         conns: [
-          { proto: "tcp", dst: "142.250.74.110", dport: 443, host: "rr3.googlevideo.com", uid: 10134, channel: "YouTube", out: "vless-nl", bytes: 48 * MB, age: 94 },
-          { proto: "udp", dst: "149.154.167.51", dport: 443, uid: 10156, channel: "Telegram", out: "vless-nl", bytes: 2.1 * MB, age: 610 },
-          { proto: "tcp", dst: "194.54.14.131", dport: 443, host: "online.sberbank.ru", uid: 10123, channel: "Банки напрямую", out: "direct", bytes: 310 * 1024, age: 12 },
-          { proto: "tcp", dst: "87.250.250.242", dport: 443, host: "yandex.ru", uid: 10201, bytes: 96 * 1024, age: 33 },
+          { family: "ipv4", proto: "tcp", src: "10.0.0.5", sport: 40312, dst: "142.250.74.110", dport: 443, mark: "0x00400000", out: "vless-nl", state: "established", bytes: 310 * 1024, reply_bytes: 48 * MB },
+          { family: "ipv4", proto: "udp", src: "10.0.0.5", sport: 51000, dst: "149.154.167.51", dport: 443, mark: "0x00400000", out: "vless-nl", bytes: 96 * 1024, reply_bytes: 2.1 * MB },
+          { family: "ipv6", proto: "tcp", src: "2a00:1450::5", sport: 44120, dst: "2a00:1450:4010:c05::64", dport: 443, mark: "0x00800000", out: "wg-home", state: "established" },
+          { family: "ipv4", proto: "tcp", src: "10.0.0.5", sport: 40990, dst: "162.159.135.232", dport: 443, mark: "0x00c00000", out: null, state: "time_wait" },
         ],
+        shown: 4,
+        total: 4,
+        truncated: false,
       }
     case "engine.dnsLog":
-      if (q.get("conns") !== "1") throw new Fail("unknown-method")
-      return [
-        { at: now() - 4, name: "rr3.googlevideo.com", qtype: "A", uid: 10134, channel: "YouTube", out: "vless-nl", answers: ["198.18.0.41"] },
-        { at: now() - 9, name: "yandex.ru", qtype: "A", uid: 10201, answers: ["87.250.250.242"] },
-        { at: now() - 15, name: "discord.com", qtype: "AAAA", uid: 10178, channel: "Discord", out: "vless-nl", answers: [] },
-        { at: now() - 40, name: "online.sberbank.ru", qtype: "A", uid: 10123, channel: "Банки напрямую", out: "direct", answers: ["194.54.14.131"] },
-      ]
+      needEngine()
+      if (q.get("conns") === "0") throw new Fail("unknown-method", "Недоступно в этой версии системы")
+      return {
+        schema: 1,
+        running: engine.enabled,
+        size: 256,
+        names: engine.enabled
+          ? [
+              { name: "rr3.googlevideo.com", channel: "YouTube", out: "vless-nl", count: 14, last: now() - 3, ago: 3 },
+              { name: "yandex.ru", channel: null, out: null, count: 6, last: now() - 9, ago: 9 },
+              { name: "discord.com", channel: "Discord", out: "vless-nl", count: 2, last: now() - 40, ago: 40 },
+              { name: "gitlab.work.example", channel: "Работа", out: "wg-home", count: 1, last: now() - 610, ago: 610 },
+            ]
+          : [],
+      }
     case "system.network":
       return network
     case "system.privateDns":
@@ -262,79 +332,116 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
       return args.system ? apps : apps.filter((a) => !a.system)
     case "settings.get":
       return structuredClone(model)
-    case "settings.put":
-      if (!args || !Array.isArray(args.channels)) throw new Fail("bad-args", "Модель без правил")
-      model = structuredClone(args as Model)
+    case "settings.put": {
+      // Как Dispatcher.settingsPut: часть модели, подписки — только названия известных.
+      const next = { ...structuredClone(model), ...structuredClone(args) } as Model
+      next.subs = model.subs.map((s) => ({ ...s, name: args.subs?.find((x: { id: string }) => x.id === s.id)?.name ?? s.name }))
+      for (const c of next.channels) {
+        if (!c.name.trim()) throw new Fail("bad-args", "У правила нет имени")
+        if (c.out !== "direct" && !next.outputs.some((o) => o.name === c.out)) throw new Fail("bad-args", `Правило «${c.name}»: выхода «${c.out}» нет`)
+        for (const n of c.what.custom) if (!next.custom.some((x) => x.name === n)) throw new Fail("bad-args", `Правило «${c.name}»: своего списка «${n}» нет`)
+      }
+      model = next
       return { saved: true }
+    }
     case "spec.preview":
-      return { spec: { schema: 1 }, check: { code: 0, stderr: "" } }
+      return { spec: { schema: 1 }, check: { code: 0, stderr: "" }, warnings: [], needs_local_dns: true }
     case "spec.apply":
       needEngine()
       await delay(900)
       if (q.get("apply") === "fail")
-        return { applied: false, rolled_back: true, message: "канал «Работа»: список работа пуст" }
+        return {
+          applied: false,
+          saved: false,
+          rolled_back: true,
+          message: "Система не приняла новые правила — оставлены прежние: устройство wg0 не найдено",
+          warnings: [],
+        }
       setTimeout(() => emit("engine.changed", engine), 50)
-      return { applied: true }
+      return engine.enabled
+        ? { applied: true, saved: true, warnings: [] }
+        : { applied: false, saved: true, message: "Настройка сохранена; правила заработают, когда движок включат", warnings: [] }
     case "lists.catalog":
       await delay(200)
       return catalogReply()
     case "lists.select": {
-      const e = catalog.find((c) => c.id === args.id)
-      if (!e) throw new Fail("bad-args", "Нет такого списка")
-      e.selected = !!args.on
+      if (!catalog.some((c) => c.id === args.id)) throw new Fail("bad-args", "Не указан список")
+      model.lists = args.on ? [...new Set([...model.lists, args.id])] : model.lists.filter((x) => x !== args.id)
       return { saved: true }
     }
     case "lists.update":
       setTimeout(() => {
-        for (const e of catalog) e.updated = now()
+        for (const e of catalog) if (e.downloaded) e.downloaded.updated = now()
+        lastUpdate = { ok: true, changed: 3, at: now() }
         emit("lists.updated", { ok: true, changed: 3 })
       }, 2200)
       return { started: true }
-    case "lists.custom":
+    case "lists.custom": {
       if (args.put) {
-        const put = args.put as CustomList
-        custom = [...custom.filter((c) => c.name !== put.name), put]
-        return { saved: true }
+        const name = String(args.put.name || "")
+        if (!/^[A-Za-z0-9_-]{1,24}$/.test(name)) throw new Fail("bad-args", `Свой список «${name}»: латиница, цифры, «_» и «-», до 24 знаков`)
+        const lines = [...(args.put.domains ?? []), ...(args.put.prefixes ?? []), ...String(args.put.text ?? "").split(/\s+/)]
+          .map((x: string) => x.trim().toLowerCase())
+          .filter(Boolean)
+        const prefixes = lines.filter((x: string) => PREFIX.test(x))
+        const domains = lines.filter((x: string) => !PREFIX.test(x) && DOMAIN.test(x))
+        if (!domains.length && !prefixes.length) throw new Fail("bad-args", `В списке «${name}» нет ни одного домена или подсети`)
+        model.custom = [...model.custom.filter((c) => c.name !== name), { name, domains, prefixes }]
+        return { saved: true, domains: domains.length, prefixes: prefixes.length, dropped: lines.length - domains.length - prefixes.length }
       }
       if (args.remove) {
-        custom = custom.filter((c) => c.name !== args.remove)
+        const user = model.channels.find((c) => c.what.custom.includes(args.remove))
+        if (user) throw new Fail("bad-args", `Список «${args.remove}» используется в правиле «${user.name}» — сначала уберите его оттуда`)
+        model.custom = model.custom.filter((c) => c.name !== args.remove)
         return { saved: true }
       }
-      return custom
+      return customReply()
+    }
     case "subs.list":
-      return subs
+      return subsReply()
     case "subs.add": {
       await delay(1200)
-      const url = String(args.url || "")
-      if (!/^(https?|vless):\/\//.test(url)) throw new Fail("bad-args", "Нужна ссылка https://… или vless://")
-      subs = [...subs, { id: "s" + (subs.length + 1), name: new URL(url.replace(/^vless:/, "http:")).hostname, url, nodes: 3, updated: now() }]
-      return subs
+      const url = String(args.url || "").trim()
+      const id = "s" + (subs.length + 1)
+      if (/^https?:\/\//.test(url)) {
+        const name = args.name || new URL(url).hostname
+        subs = [...subs, { id, name, kind: "url", url, nodes: 3, updated: now(), skipped: 0, foreign: 0, used_by: [], hwid: subs[0]?.hwid ?? "" }]
+        model.subs = [...model.subs, { id, name, kind: "url", url }]
+      } else if (url.includes("vless://")) {
+        const n = url.split(/\s+/).filter((x) => x.startsWith("vless://")).length
+        subs = [...subs, { id, name: args.name || "Свои ссылки", kind: "links", nodes: n, updated: now(), skipped: 0, foreign: 0, used_by: [], hwid: subs[0]?.hwid ?? "" }]
+        model.subs = [...model.subs, { id, name: args.name || "Свои ссылки", kind: "links" }]
+      } else throw new Fail("bad-args", "Нужна ссылка на подписку (https://) или ссылка vless://")
+      return subsReply()
     }
-    case "subs.remove":
+    case "subs.remove": {
+      const user = model.outputs.find((o) => o.sub === args.id)
+      if (user) throw new Fail("bad-args", `Подписку использует выход «${user.name}» — сначала уберите или перенастройте его`)
       subs = subs.filter((s) => s.id !== args.id)
-      return subs
+      model.subs = model.subs.filter((s) => s.id !== args.id)
+      return subsReply()
+    }
     case "subs.refresh":
       await delay(1400)
-      subs = subs.map((s) => (!args.id || s.id === args.id ? { ...s, updated: now() } : s))
-      setTimeout(() => emit("subs.updated", subs), 50)
-      return subs
+      if (args.id && subs.find((s) => s.id === args.id)?.kind === "links") throw new Fail("bad-args", "Эту подписку нечем обновить — она из вставленных ссылок")
+      subs = subs.map((s) => ((!args.id || s.id === args.id) && s.kind === "url" ? { ...s, updated: now() } : s))
+      return subsReply()
     case "backup.export":
       await delay(300)
-      return { file: "splify2-2026-09-24.json" }
+      return { file: "/data/user/0/com.der.splify2/files/exports/splify2-20260924-101500.json", name: "splify2-20260924-101500.json", bytes: 4812, saved: true }
     case "backup.import": {
-      let parsed: unknown
+      let parsed: { format?: string; model?: Model } | null = null
       try {
         parsed = JSON.parse(String(args.json || ""))
       } catch {
-        throw new Fail("bad-args", "Файл не похож на резервную копию splify2")
+        throw new Fail("bad-args", "Это не файл настроек splify2")
       }
-      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as Model).channels))
-        throw new Fail("bad-args", "Файл не похож на резервную копию splify2")
-      model = parsed as Model
+      if (!parsed || parsed.format !== "splify2-android-backup" || !parsed.model) throw new Fail("bad-args", "Это не файл настроек splify2 для телефона")
+      model = parsed.model
       return { saved: true }
     }
   }
-  throw new Fail("unknown-method")
+  throw new Fail("unknown-method", "Эта версия приложения не знает такого действия")
 }
 
 export async function handle(

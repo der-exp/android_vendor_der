@@ -9,8 +9,12 @@ import type { ModelChannel } from "./types"
 
 export type Tab = "home" | "outputs" | "rules" | "conns" | "more"
 
+/** Заготовка нового правила (из «Соединений»): поля правила и, если нужно, строки для своего
+ *  списка — в модели правило ссылается на списки, а не держит домены в себе (Model.kt). */
+export type RulePrefill = Partial<ModelChannel> & { listText?: string }
+
 export type Sub =
-  | { kind: "rule"; index: number; prefill?: Partial<ModelChannel> }
+  | { kind: "rule"; index: number; prefill?: RulePrefill }
   | { kind: "lists" }
   | { kind: "custom" }
   | { kind: "subs" }

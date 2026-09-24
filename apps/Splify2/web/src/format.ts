@@ -2,7 +2,7 @@
  * Числа и подписи — по правилам текста Andromeda: пробел на тысячи, запятая на дробь,
  * единица через пробел, счётчик — «подпись: число», а не фраза.
  */
-import type { Model, ModelChannel, ModelOutput, OnFail, OutputKind, OutputStatus } from "./types"
+import type { ListKind, Model, ModelChannel, ModelOutput, OnFail, OutputKind, OutputStatus, WhoKind } from "./types"
 
 export function fmtInt(n: number): string {
   return Math.round(n).toLocaleString("ru-RU").replace(/ |,/g, " ")
@@ -51,22 +51,41 @@ export function fmtDuration(s: number | undefined): string {
 
 export const KIND_TEXT: Record<OutputKind, string> = {
   vless: "VLESS",
-  interface: "WireGuard",
-  xsteer: "xsteer",
+  interface: "Туннель",
   direct: "напрямую",
-  zapret: "zapret",
+  tgws: "Мост Telegram",
 }
 
 export const ON_FAIL_TEXT: Record<OnFail, string> = {
   drop: "остановить трафик",
   direct: "пустить напрямую",
-  zapret: "напрямую через zapret",
 }
 
-/** «vless-nl · Нидерланды», «Напрямую · без туннеля»: термин никогда не идёт один. */
-export function outputLabel(name: string, o?: ModelOutput): string {
-  if (o?.kind === "direct") return `Напрямую · ${o.title || "без туннеля"}`
-  return o?.title ? `${name} · ${o.title}` : name
+/** Выход по имени; "direct" есть всегда, хоть его и нет в модели (Model.kt). */
+export function findOutput(model: Model | null, name: string): ModelOutput | undefined {
+  if (name === "direct") return { name: "direct", kind: "direct" }
+  return model?.outputs.find((o) => o.name === name)
+}
+
+/** «vless-nl», «Напрямую»: имя выхода, как его видит человек. */
+export function outputLabel(name: string): string {
+  return name === "direct" ? "Напрямую" : name
+}
+
+/** Вторая строка выхода: вид и то, откуда он берёт путь. */
+export function outputSub(o: ModelOutput, subName?: (id: string) => string | undefined): string {
+  switch (o.kind) {
+    case "vless": {
+      const s = o.sub ? subName?.(o.sub) : undefined
+      return s ? `VLESS · ${s}` : "VLESS"
+    }
+    case "interface":
+      return o.devices?.length ? `Туннель · ${o.devices.join(", ")}` : "Туннель"
+    case "tgws":
+      return o.domain ? `Мост Telegram · ${o.domain}` : "Мост Telegram"
+    default:
+      return "без туннеля"
+  }
 }
 
 export type Tone = "ok" | "warn" | "bad" | "off"
@@ -91,26 +110,32 @@ export function usedOutputs(model: Model | null): Set<string> {
   return s
 }
 
-export const WHO_TEXT = { phone: "Весь телефон", apps: "Приложения", tether: "Раздача" } as const
+export const WHO_TEXT: Record<WhoKind, string> = { phone: "Весь телефон", apps: "Приложения", tether: "Раздача" }
 
-/** «что» правила одной строкой: «YouTube, Telegram», «весь трафик», «домены: 2». */
+/** «что» правила одной строкой: «YouTube, Telegram», «весь трафик». */
 export function matchText(c: ModelChannel, listName: (id: string) => string): string {
-  const m = c.match || {}
-  if (m.any) return "весь трафик"
-  const parts: string[] = []
-  for (const id of m.lists ?? []) parts.push(listName(id))
-  for (const n of m.custom ?? []) parts.push(n)
-  if (m.domains?.length) parts.push(`доменов: ${m.domains.length}`)
-  if (m.prefixes?.length) parts.push(`подсетей: ${m.prefixes.length}`)
+  const w = c.what
+  if (w.all) return "весь трафик"
+  const parts = [...w.lists.map(listName), ...w.custom]
   return parts.length ? parts.join(", ") : "ничего"
 }
 
 /** Затрагивает ли правило имена (домены) — тогда телефону нужен свой DNS, и Частный DNS
- *  выключается, пока правило включено. Списки подсетей имён не затрагивают. */
-export function touchesDomains(c: ModelChannel, listKind: (id: string) => "domains" | "prefixes" | undefined): boolean {
-  if (c.who === "tether") return false
-  const m = c.match || {}
-  if (m.any) return false
-  if (m.domains?.length || m.custom?.length) return true
-  return (m.lists ?? []).some((id) => listKind(id) !== "prefixes")
+ *  выключается, пока правило включено. Раздача и списки из одних подсетей имён телефона не
+ *  затрагивают. Окончательно это решает логика при сборке (needs_local_dns), здесь — только
+ *  подсказка в редакторе, поэтому неизвестный вид списка считается доменным. */
+export function touchesDomains(
+  c: ModelChannel,
+  listKinds: (id: string) => ListKind[] | undefined,
+  customHasDomains: (name: string) => boolean,
+): boolean {
+  if (c.who.kind === "tether" || c.what.all) return false
+  if (c.what.custom.some(customHasDomains)) return true
+  return c.what.lists.some((id) => listKinds(id)?.includes("domains") ?? true)
+}
+
+/** Байты счётчика, пришедшие строкой (квота подписки): число или 0. */
+export function bytesOf(s: string | undefined): number {
+  const n = Number(s)
+  return isFinite(n) && n > 0 ? n : 0
 }

@@ -1,23 +1,23 @@
 /**
- * Соединения и DNS: живые соединения с правилом и выходом, недавние имена и куда они
- * попали; из строки — «добавить правило». Плюс «куда пойдёт запрос» (engine.explain),
- * который есть уже сейчас.
+ * Соединения и DNS: соединения, которые движок повёл в свои выходы, и недавние имена с тем,
+ * куда они попали; из строки — «добавить правило». Плюс «куда пойдёт запрос» (engine.explain).
  *
- * `engine.conns` и `engine.dnsLog` появятся вместе с командами сокета; до того оболочка
- * отвечает `unknown-method`, и экран показывает пустое состояние. Разбор ответа готов
- * (parse.ts), форма строк — types.ts (Conn, DnsEntry).
+ * Формы — `steer conns` и `steer dns-log` (steer/docs/ctl.md). Приложения и имени хоста у
+ * соединения нет — conntrack их не хранит, — поэтому строка соединения называет адрес, порт и
+ * выход, а правило по выходу подбирается, только если в этот выход ведёт ровно одно правило:
+ * иначе экран назвал бы правило, которого движок не называл. Движок без этих команд —
+ * `unknown-method`, экран показывает пустое состояние.
  */
 import { useCallback, useEffect, useState } from "react"
 import { Button, Card, CodeBlock, IconButton, Input, Skeleton } from "@andromeda/ui"
 import { BridgeError, call, errorText } from "../bridge"
 import { useStore } from "../store"
-import { useNav } from "../nav"
-import { useAppLabels } from "../apps"
+import { useNav, type RulePrefill } from "../nav"
 import { parseConns, parseDnsLog } from "../parse"
-import { AppIcon, Body, CardHead, Empty, Header, Segmented, col, ellipsis, muted, rowS } from "../ui"
+import { Body, CardHead, Empty, Header, Segmented, col, ellipsis, muted, rowS } from "../ui"
 import { Icon } from "../icons"
-import { fmtBytes, fmtDuration, fmtTime } from "../format"
-import type { AppInfo, Conn, DnsEntry, ModelChannel } from "../types"
+import { fmtBytes, fmtDuration, fmtInt } from "../format"
+import type { Conn, DnsName, Model } from "../types"
 
 type View = "conns" | "dns"
 
@@ -71,21 +71,20 @@ function Explain() {
   )
 }
 
-function useFeed<T>(method: "engine.conns" | "engine.dnsLog", parse: (v: unknown) => T[], active: boolean) {
-  const [rows, setRows] = useState<T[] | null>(null)
+function useFeed<T>(method: "engine.conns" | "engine.dnsLog", parse: (v: unknown) => T, active: boolean) {
+  const [data, setData] = useState<T | null>(null)
   const [missing, setMissing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const load = useCallback(() => {
     call(method)
       .then((v) => {
-        setRows(parse(v))
+        setData(parse(v))
         setErr(null)
         setMissing(false)
       })
       .catch((e) => {
         if (e instanceof BridgeError && e.code === "unknown-method") setMissing(true)
         else setErr(errorText(e))
-        setRows((r) => r ?? [])
       })
   }, [method, parse])
   useEffect(() => {
@@ -96,88 +95,72 @@ function useFeed<T>(method: "engine.conns" | "engine.dnsLog", parse: (v: unknown
     }, 5000)
     return () => window.clearInterval(t)
   }, [active, load, missing])
-  return { rows, missing, err, load }
+  return { data, missing, err, load }
 }
 
-function Route({ channel, out }: { channel?: string; out?: string }) {
-  if (!channel) return <>без правила → напрямую</>
-  return (
-    <>
-      {channel} → {out === "direct" || !out ? "напрямую" : out}
-    </>
-  )
+const outName = (out: string | null | undefined) => (!out || out === "direct" ? "напрямую" : out)
+
+/** Правило по выходу — только когда в выход ведёт ровно одно включённое правило. */
+function ruleByOut(model: Model | null, out: string | null): string | undefined {
+  if (!out) return undefined
+  const rules = (model?.channels ?? []).filter((c) => c.enabled && c.out === out)
+  return rules.length === 1 ? rules[0].name : undefined
 }
 
-function ConnRow({ c, app, onAdd }: { c: Conn; app?: AppInfo; onAdd: () => void }) {
-  const name = c.host || c.dst
+function Row({ title, sub, meta, onAdd }: { title: string; sub: string; meta?: string; onAdd?: () => void }) {
   return (
     <div style={{ ...rowS("var(--an-space-5)"), minHeight: 56, padding: "4px 0" }}>
-      {app ? <AppIcon pkg={app.pkg} label={app.label} size={32} /> : <span style={{ width: 32, flex: "0 0 auto", color: "var(--an-text-muted)", display: "inline-flex", justifyContent: "center" }}><Icon name="phone" size={18} /></span>}
       <div style={{ ...col("1px"), flex: 1, minWidth: 0 }}>
-        <span style={{ font: "var(--an-text-code)", color: "var(--an-text)", ...ellipsis }}>
-          {name}
-          {c.dport ? `:${c.dport}` : ""}
-        </span>
-        <span style={{ font: "var(--an-text-caption)", color: "var(--an-text-secondary)", ...ellipsis }}>
-          {app ? `${app.label} · ` : ""}
-          <Route channel={c.channel} out={c.out} />
-        </span>
-        <span className="sp-tab" style={{ font: "var(--an-text-micro)", color: "var(--an-text-muted)", ...ellipsis }}>
-          {[c.proto, c.bytes != null ? fmtBytes(c.bytes) : null, c.age != null ? fmtDuration(c.age) : null].filter(Boolean).join(" · ")}
-        </span>
+        <span style={{ font: "var(--an-text-code)", color: "var(--an-text)", ...ellipsis }}>{title}</span>
+        <span style={{ font: "var(--an-text-caption)", color: "var(--an-text-secondary)", ...ellipsis }}>{sub}</span>
+        {meta ? <span className="sp-tab" style={{ font: "var(--an-text-micro)", color: "var(--an-text-muted)", ...ellipsis }}>{meta}</span> : null}
       </div>
-      <IconButton label="Добавить правило" onClick={onAdd}>
-        <Icon name="plus" size={18} />
-      </IconButton>
+      {onAdd ? (
+        <IconButton label="Добавить правило" onClick={onAdd}>
+          <Icon name="plus" size={18} />
+        </IconButton>
+      ) : null}
     </div>
   )
 }
 
-function DnsRow({ e, app, onAdd }: { e: DnsEntry; app?: AppInfo; onAdd: () => void }) {
-  return (
-    <div style={{ ...rowS("var(--an-space-5)"), minHeight: 56, padding: "4px 0" }}>
-      {app ? <AppIcon pkg={app.pkg} label={app.label} size={32} /> : <span style={{ width: 32, flex: "0 0 auto", color: "var(--an-text-muted)", display: "inline-flex", justifyContent: "center" }}><Icon name="phone" size={18} /></span>}
-      <div style={{ ...col("1px"), flex: 1, minWidth: 0 }}>
-        <span style={{ font: "var(--an-text-code)", color: "var(--an-text)", ...ellipsis }}>{e.name}</span>
-        <span style={{ font: "var(--an-text-caption)", color: "var(--an-text-secondary)", ...ellipsis }}>
-          {app ? `${app.label} · ` : ""}
-          <Route channel={e.channel} out={e.out} />
-        </span>
-        <span className="sp-tab" style={{ font: "var(--an-text-micro)", color: "var(--an-text-muted)", ...ellipsis }}>
-          {[e.at ? fmtTime(e.at) : null, e.qtype, e.answers?.length ? e.answers.join(", ") : null].filter(Boolean).join(" · ")}
-        </span>
-      </div>
-      <IconButton label="Добавить правило" onClick={onAdd}>
-        <Icon name="plus" size={18} />
-      </IconButton>
-    </div>
-  )
+/** Состояние TCP словами: установленное — обычное дело и не называется; слова conntrack
+ *  (time_wait, syn_sent…) человеку ничего не говорят. */
+function stateText(st?: string): string | null {
+  if (!st || st === "established" || st === "none") return null
+  if (st.startsWith("syn")) return "устанавливается"
+  return "закрывается"
+}
+
+function ConnRow({ c, rule, onAdd }: { c: Conn; rule?: string; onAdd?: () => void }) {
+  const dst = c.family === "ipv6" && c.dport ? `[${c.dst}]:${c.dport}` : c.dport ? `${c.dst}:${c.dport}` : c.dst
+  const sub = c.out ? `${rule ? `${rule} → ` : ""}${outName(c.out)}` : "выход уже убран"
+  const bytes = c.reply_bytes != null || c.bytes != null ? `↓ ${fmtBytes(c.reply_bytes)} · ↑ ${fmtBytes(c.bytes)}` : null
+  return <Row title={dst} sub={sub} meta={[c.proto, stateText(c.state), bytes].filter(Boolean).join(" · ")} onAdd={onAdd} />
+}
+
+function DnsRow({ e, onAdd }: { e: DnsName; onAdd: () => void }) {
+  const sub = e.channel ? `${e.channel} → ${outName(e.out)}` : "без правила → напрямую"
+  const meta = `запросов: ${fmtInt(e.count)} · ${e.ago < 45 ? "только что" : `${fmtDuration(e.ago)} назад`}`
+  return <Row title={e.name} sub={sub} meta={meta} onAdd={onAdd} />
 }
 
 export function Conns() {
   const { engine, draft } = useStore()
   const { open } = useNav()
   const [view, setView] = useState<View>("conns")
-  const [, apps] = useAppLabels()
   const conns = useFeed("engine.conns", parseConns, view === "conns")
   const dns = useFeed("engine.dnsLog", parseDnsLog, view === "dns")
-  const app = (uid?: number) => (uid == null ? undefined : apps?.find((a) => a.uid === uid))
 
-  const firstOut = draft ? Object.values(draft.outputs).find((o) => o.kind !== "direct")?.name : undefined
-  const addRule = (host: string | undefined, ip: string | undefined, uid?: number) => {
-    const a = app(uid)
-    const prefill: Partial<ModelChannel> = {
-      name: host || ip || "",
-      who: a ? "apps" : "phone",
-      ...(a ? { uids: [a.uid] } : {}),
-      match: host ? { domains: [host] } : ip ? { prefixes: [ip.includes(":") ? `${ip}/128` : `${ip}/32`] } : {},
-      ...(firstOut ? { out: firstOut } : {}),
-    }
+  const firstOut = draft?.outputs.find((o) => o.kind !== "tgws")?.name
+  const addRule = (text: string, name: string) => {
+    const prefill: RulePrefill = { name, who: { kind: "phone" }, listText: text, ...(firstOut ? { out: firstOut } : {}) }
     open({ kind: "rule", index: -1, prefill }, "rules")
   }
 
   const feed = view === "conns" ? conns : dns
   const off = engine && !engine.enabled
+  const rows = view === "conns" ? conns.data?.rows : dns.data?.rows
   return (
     <>
       <Header
@@ -202,30 +185,41 @@ export function Conns() {
         />
         <Card style={col("var(--an-space-1)")}>
           {feed.missing ? (
-            <Empty icon={view === "conns" ? "conns" : "list"} text="Недоступно в этой версии приложения" />
+            <Empty icon={view === "conns" ? "conns" : "list"} text="Недоступно в этой версии системы" />
           ) : off ? (
             <Empty icon="power" text="Маршрутизация выключена" />
-          ) : feed.err ? (
+          ) : feed.err && !rows ? (
             <Empty icon="conns" text={feed.err} />
-          ) : feed.rows === null ? (
+          ) : !rows ? (
             <Skeleton height={52} count={4} />
-          ) : feed.rows.length === 0 ? (
-            <Empty icon={view === "conns" ? "conns" : "list"} text={view === "conns" ? "Соединений нет" : "Запросов не было"} />
-          ) : view === "conns" ? (
+          ) : view === "dns" && dns.data && !dns.data.running ? (
+            <Empty icon="list" text="Правил по доменам сейчас нет — имена не записываются" />
+          ) : rows.length === 0 ? (
+            <Empty icon={view === "conns" ? "conns" : "list"} text={view === "conns" ? "Соединений через выходы нет" : "Запросов не было"} />
+          ) : view === "conns" && conns.data ? (
             <>
-              <div style={muted}>соединений: {feed.rows.length}</div>
-              {(conns.rows ?? []).map((c, i) => (
-                <ConnRow key={i} c={c} app={app(c.uid)} onAdd={() => addRule(c.host, c.dst, c.uid)} />
+              <div style={muted}>
+                соединений: {fmtInt(conns.data.total)}
+                {conns.data.truncated ? ` · показано: ${fmtInt(conns.data.rows.length)}` : ""}
+              </div>
+              {conns.data.rows.map((c, i) => (
+                <ConnRow
+                  key={i}
+                  c={c}
+                  rule={ruleByOut(draft, c.out)}
+                  // Свои списки держат подсети IPv4 (как на роутере) — для IPv6 правило не заготовить.
+                  onAdd={c.family === "ipv4" ? () => addRule(`${c.dst}/32`, c.dst) : undefined}
+                />
               ))}
             </>
-          ) : (
+          ) : dns.data ? (
             <>
-              <div style={muted}>запросов: {feed.rows.length}</div>
-              {(dns.rows ?? []).map((e, i) => (
-                <DnsRow key={i} e={e} app={app(e.uid)} onAdd={() => addRule(e.name, undefined, e.uid)} />
+              <div style={muted}>имён: {fmtInt(dns.data.rows.length)}</div>
+              {dns.data.rows.map((e, i) => (
+                <DnsRow key={i} e={e} onAdd={() => addRule(e.name, e.name)} />
               ))}
             </>
-          )}
+          ) : null}
         </Card>
       </Body>
     </>

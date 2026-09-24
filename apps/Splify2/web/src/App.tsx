@@ -52,7 +52,7 @@ function BottomNav() {
         display: "flex",
         borderTop: "1px solid var(--an-border)",
         background: "var(--an-surface-card)",
-        padding: "0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px)",
+        padding: "0 var(--sp-inset-right) var(--sp-inset-bottom) var(--sp-inset-left)",
       }}
     >
       {TABS.map((t) => {
@@ -114,7 +114,7 @@ function Screens() {
 
 function Floating() {
   const { changes, applyState, apply, toasts, draft } = useStore()
-  const lift = "calc(var(--sp-nav-h) + env(safe-area-inset-bottom, 0px) + 14px)"
+  const lift = "calc(var(--sp-nav-h) + var(--sp-inset-bottom) + 14px)"
   return (
     <>
       {draft ? <ApplyPill changes={changes} state={applyState} onApply={apply} style={{ bottom: lift }} /> : null}

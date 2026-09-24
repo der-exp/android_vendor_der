@@ -11,6 +11,37 @@ import { KIND_TEXT, fmtBytes, outputLabel, outputState, usedOutputs } from "../f
 import type { NetworkInfo, PrivateDns } from "../types"
 import logo from "@andromeda/ui/assets/logo-andromeda.svg"
 
+/**
+ * Заголовок состояния. Та же закрытая пара «точка + фраза», что у Verdict пакета, но точка
+ * своя: у Verdict живое состояние пульсирует прозрачностью до 0,3, и в тёмной теме зелёная
+ * точка на тёмной карточке в этой фазе почти пропадает — «работает» читалось как «погасло».
+ * Здесь точка держит полный цвет, а живость показывает кольцо вокруг — полупрозрачным тем же
+ * цветом состояния (токены --an-success/--an-danger/--an-warn), заметное в обеих темах.
+ */
+const HEAD = {
+  running: { tone: "ok", color: "var(--an-success)", text: "Маршрутизация работает" },
+  broken: { tone: "bad", color: "var(--an-danger)", text: "Есть поломки" },
+  silent: { tone: "warn", color: "var(--an-warn)", text: "Движок не отвечает" },
+  off: { tone: "off", color: "var(--an-text-muted)", text: "Маршрутизация выключена" },
+} as const
+
+function Head({ state, meta }: { state: keyof typeof HEAD; meta?: string }) {
+  const h = HEAD[state]
+  return (
+    <div>
+      <div style={rowS("var(--an-space-5)")}>
+        <StatusDot
+          tone={h.tone}
+          size={11}
+          style={state === "off" ? undefined : { boxShadow: `0 0 0 4px color-mix(in srgb, ${h.color} 28%, transparent)` }}
+        />
+        <h1 style={{ font: "var(--an-text-verdict)", letterSpacing: "var(--an-tracking-verdict)" }}>{h.text}</h1>
+      </div>
+      {meta ? <p style={{ marginTop: "var(--an-space-3)", font: "var(--an-text-body-sm)", color: "var(--an-text-muted)" }}>{meta}</p> : null}
+    </div>
+  )
+}
+
 function MainCard() {
   const { engine, engineError, status, statusError, draft, setEnabled, engineBusy, applyError } = useStore()
   const used = usedOutputs(draft)
@@ -28,19 +59,9 @@ function MainCard() {
   if (!engine && !engineError) head = <Verdict state="loading" />
   else if (silent) {
     const why = engineError || statusError
-    head = <Verdict state="silent" meta={why && why !== "Движок не отвечает" ? why : undefined} />
-  }
-  else if (!engine?.enabled)
-    head = (
-      <div>
-        <div style={rowS("var(--an-space-5)")}>
-          <StatusDot tone="off" size={11} />
-          <h1 style={{ font: "var(--an-text-verdict)", letterSpacing: "var(--an-tracking-verdict)" }}>Маршрутизация выключена</h1>
-        </div>
-        <p style={{ marginTop: "var(--an-space-3)", font: "var(--an-text-body-sm)", color: "var(--an-text-muted)" }}>весь трафик идёт напрямую</p>
-      </div>
-    )
-  else head = <Verdict state={broken ? "broken" : "running"} meta={`правил включено: ${enabledRules}`} />
+    head = <Head state="silent" meta={why && !why.startsWith("Движок не отвечает") ? why : undefined} />
+  } else if (!engine?.enabled) head = <Head state="off" meta="весь трафик идёт напрямую" />
+  else head = <Head state={broken ? "broken" : "running"} meta={`правил включено: ${enabledRules}`} />
 
   const warnings = status?.warnings ?? []
   return (
@@ -105,7 +126,7 @@ function OutputsCard() {
   const { go } = useNav()
   if (!draft) return <Skeleton height={160} radius="var(--an-radius-card)" />
   const used = usedOutputs(draft)
-  const outs = Object.values(draft.outputs).filter((o) => o.kind !== "direct")
+  const outs = draft.outputs.filter((o) => o.kind !== "direct")
   const states = outs.map((o) => outputState(status?.outputs[o.name], !!engine?.enabled, used.has(o.name), !!status))
   const working = states.filter((s) => s.tone === "ok").length
   return (
@@ -116,7 +137,7 @@ function OutputsCard() {
         const st = status?.outputs[o.name]
         const s = states[i]
         const sub = [KIND_TEXT[o.kind], st?.up && st.device ? st.device : null].filter(Boolean).join(" · ")
-        return <TapRow key={o.name} dot={s.tone} title={outputLabel(o.name, o)} subtitle={sub} right={s.text} onClick={() => go("outputs")} />
+        return <TapRow key={o.name} dot={s.tone} title={outputLabel(o.name)} subtitle={sub} right={s.text} onClick={() => go("outputs")} />
       })}
     </Card>
   )

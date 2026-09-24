@@ -3,14 +3,14 @@
  * Выбор меняет правило сразу; «Назад» (стрелка или системная кнопка) закрывает страницу.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react"
-import { Input, Skeleton, Switch } from "@andromeda/ui"
+import { Button, Input, Skeleton, Switch } from "@andromeda/ui"
 import { loadApps } from "../apps"
 import { errorText } from "../bridge"
-import { useStore } from "../store"
+import { groupBySource, useStore } from "../store"
 import { AppIcon, Body, Empty, Header, col, ellipsis, muted, rowS } from "../ui"
 import { Icon } from "../icons"
 import { fmtInt } from "../format"
-import type { AppInfo, CustomList } from "../types"
+import type { AppInfo, CatalogItem, CustomList } from "../types"
 
 /** Полноэкранный слой поверх раздела, закрывает и нижнюю панель. */
 export function Overlay({ title, onBack, children }: { title: string; onBack: () => void; children: ReactNode }) {
@@ -121,51 +121,47 @@ export function AppPicker({ uids, onChange, onBack }: { uids: number[]; onChange
 export function ListPicker({
   lists,
   custom,
-  customLists,
   onChange,
+  onNewList,
   onBack,
 }: {
   lists: string[]
   custom: string[]
-  customLists: CustomList[] | null
   onChange: (lists: string[], custom: string[]) => void
+  onNewList: () => void
   onBack: () => void
 }) {
-  const { catalog } = useStore()
+  const { catalog, catalogError, custom: customLists } = useStore()
   const [q, setQ] = useState("")
   const s = q.trim().toLowerCase()
-  const groups = useMemo(() => {
-    const g = new Map<string, NonNullable<typeof catalog>>()
-    for (const e of catalog ?? []) {
-      if (s && !e.name.toLowerCase().includes(s) && !e.id.includes(s)) continue
-      const k = e.category || "Прочее"
-      if (!g.has(k)) g.set(k, [])
-      g.get(k)!.push(e)
-    }
-    return [...g.entries()]
-  }, [catalog, s])
+  const groups = useMemo(
+    () => groupBySource((catalog ?? []).filter((e) => !s || e.name.toLowerCase().includes(s) || e.id.toLowerCase().includes(s))),
+    [catalog, s],
+  )
   const mine = (customLists ?? []).filter((c) => !s || c.name.toLowerCase().includes(s))
   return (
     <Overlay title="Списки" onBack={onBack}>
       <Search value={q} onChange={setQ} placeholder="Найти список" />
+      <section style={col("var(--an-space-2)")}>
+        <h2 style={{ ...muted, padding: "0 8px" }}>Свои списки</h2>
+        {mine.map((c) => (
+          <PickRow
+            key={c.name}
+            on={custom.includes(c.name)}
+            onClick={() => onChange(lists, custom.includes(c.name) ? custom.filter((x) => x !== c.name) : [...custom, c.name])}
+            title={c.name}
+            sub={customSub(c)}
+          />
+        ))}
+        <Button tone="ghost" icon={<Icon name="plus" />} onClick={onNewList} style={{ alignSelf: "flex-start" }}>
+          Новый свой список
+        </Button>
+      </section>
       {!catalog ? <Skeleton height={56} count={6} /> : null}
-      {mine.length ? (
-        <section style={col("var(--an-space-2)")}>
-          <h2 style={{ ...muted, padding: "0 8px" }}>Свои списки</h2>
-          {mine.map((c) => (
-            <PickRow
-              key={c.name}
-              on={custom.includes(c.name)}
-              onClick={() => onChange(lists, custom.includes(c.name) ? custom.filter((x) => x !== c.name) : [...custom, c.name])}
-              title={c.name}
-              sub={`доменов: ${c.domains.length} · подсетей: ${c.prefixes.length}`}
-            />
-          ))}
-        </section>
-      ) : null}
-      {groups.map(([cat, items]) => (
-        <section key={cat} style={col("var(--an-space-2)")}>
-          <h2 style={{ ...muted, padding: "0 8px" }}>{cat}</h2>
+      {catalog && catalog.length === 0 && catalogError ? <Empty icon="list" text={catalogError} /> : null}
+      {groups.map(([src, items]) => (
+        <section key={src} style={col("var(--an-space-2)")}>
+          <h2 style={{ ...muted, padding: "0 8px" }}>{src}</h2>
           {items.map((e) => (
             <PickRow
               key={e.id}
@@ -173,12 +169,25 @@ export function ListPicker({
               onClick={() => onChange(lists.includes(e.id) ? lists.filter((x) => x !== e.id) : [...lists, e.id], custom)}
               title={e.name}
               sub={e.description}
-              meta={e.count != null ? `${e.kind === "prefixes" ? "подсетей" : "доменов"}: ${fmtInt(e.count)}` : undefined}
+              meta={catalogMeta(e)}
             />
           ))}
         </section>
       ))}
-      {catalog && groups.length === 0 && mine.length === 0 ? <Empty icon="search" text="Ничего не нашлось." /> : null}
+      {catalog && s && groups.length === 0 && mine.length === 0 ? <Empty icon="search" text="Ничего не нашлось." /> : null}
     </Overlay>
   )
+}
+
+/** «доменов: 12 · подсетей: 3» — без пустой половины. */
+export function customSub(c: CustomList): string {
+  return [c.domains.length ? `доменов: ${c.domains.length}` : null, c.prefixes.length ? `подсетей: ${c.prefixes.length}` : null].filter(Boolean).join(" · ") || "пусто"
+}
+
+/** Размер службы каталога: скачанное, а без него — что обещает каталог. */
+export function catalogMeta(e: CatalogItem): string | undefined {
+  const n = e.downloaded?.count ?? e.count
+  if (n == null) return undefined
+  const word = e.kinds.length === 1 && e.kinds[0] === "prefixes" ? "подсетей" : "записей"
+  return `${word}: ${fmtInt(n)}`
 }

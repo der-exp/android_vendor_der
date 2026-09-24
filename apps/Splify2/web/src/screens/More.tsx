@@ -2,19 +2,21 @@
  * Ещё: списки из каталога и их обновление, свои списки, подписки, резервная копия,
  * движок. Каждое — подэкран со стрелкой назад (глубже двух уровней Andromeda не ходит).
  *
- * В отличие от правил, здесь всё действует сразу: выбор списка, подписка, импорт — это
- * данные логики, а не спека; к движку они попадут со следующим применением правил.
+ * В отличие от правил, здесь всё сохраняется сразу: выбор списка, свой список, подписка,
+ * настройка обновления, импорт — это данные логики, а не черновик правил; к движку они
+ * попадут со следующим применением правил (или ночным обновлением — оно применяет само).
  */
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Badge, Button, Callout, Card, Dialog, Field, Input, Meter, Skeleton, StatusDot, Textarea } from "@andromeda/ui"
+import { Badge, Button, Callout, Card, Dialog, Field, Meter, Skeleton, StatusDot, Switch, Textarea } from "@andromeda/ui"
 import { call, errorText, on } from "../bridge"
-import { useStore } from "../store"
+import { groupBySource, useStore } from "../store"
 import { useNav, type Sub as SubRoute } from "../nav"
 import { Body, CardHead, Divider, Empty, Header, KV, TapRow, col, ellipsis, mono, muted, rowS } from "../ui"
 import { Icon } from "../icons"
-import { fmtAgo, fmtBytes, fmtDate, fmtInt } from "../format"
-import type { CustomList, Diag, Sub } from "../types"
-import { PickRow, Search } from "./Pickers"
+import { bytesOf, fmtAgo, fmtBytes, fmtDate } from "../format"
+import type { Diag, Sub } from "../types"
+import { PickRow, Search, catalogMeta, customSub } from "./Pickers"
+import { CustomEdit } from "./CustomEdit"
 
 // ── Списки каталога ───────────────────────────────────────────────────────────
 
@@ -44,24 +46,22 @@ function useListsUpdate() {
 }
 
 function ListsPage() {
-  const { catalog, catalogUpdated, reloadCatalog, draft, toast } = useStore()
+  const { catalog, catalogInfo, catalogError, reloadCatalog, draft, toast } = useStore()
   const { back } = useNav()
   const upd = useListsUpdate()
   const [q, setQ] = useState("")
   const [local, setLocal] = useState<Record<string, boolean>>({})
+  // «В правилах» — по черновику: человек видит свои правила такими, какими их только что правил.
   const usedBy = useMemo(() => {
     const m = new Map<string, string[]>()
-    for (const c of draft?.channels ?? []) for (const id of c.match.lists ?? []) m.set(id, [...(m.get(id) ?? []), c.name])
+    for (const c of draft?.channels ?? []) for (const id of c.what.lists) m.set(id, [...(m.get(id) ?? []), c.name])
     return m
   }, [draft])
   const s = q.trim().toLowerCase()
-  const items = (catalog ?? []).filter((e) => !s || e.name.toLowerCase().includes(s) || e.id.includes(s))
-  const groups = new Map<string, typeof items>()
-  for (const e of items) {
-    const k = e.category || "Прочее"
-    groups.set(k, [...(groups.get(k) ?? []), e])
-  }
+  const items = (catalog ?? []).filter((e) => !s || e.name.toLowerCase().includes(s) || e.id.toLowerCase().includes(s))
+  const groups = groupBySource(items)
   const selected = (catalog ?? []).filter((e) => local[e.id] ?? e.selected).length
+  const last = catalogInfo?.last_update
   const toggle = async (id: string, cur: boolean) => {
     setLocal((l) => ({ ...l, [id]: !cur }))
     try {
@@ -82,17 +82,20 @@ function ListsPage() {
       <Body>
         <Card style={col("var(--an-space-4)")}>
           <KV k="выбрано" v={catalog ? `${selected} из ${catalog.length}` : "—"} />
-          <KV k="обновлены" v={fmtAgo(catalogUpdated)} />
+          <KV k="обновлены" v={last?.at ? fmtAgo(last.at) : "ещё не обновлялись"} />
+          {last && !last.ok && last.message ? <Callout tone="warn" title="Обновились не все" verbatim={last.message} /> : null}
           <Button tone="secondary" full icon={<Icon name="refresh" />} busy={upd.busy} onClick={upd.start}>
             {upd.busy ? "Скачиваем…" : "Обновить списки"}
           </Button>
         </Card>
+        <div style={muted}>Выбранные списки обновляются, даже если их ещё нет в правилах.</div>
         <Search value={q} onChange={setQ} placeholder="Найти список" />
         {!catalog ? <Skeleton height={56} count={6} /> : null}
-        {catalog && items.length === 0 ? <Empty icon="search" text="Ничего не нашлось." /> : null}
-        {[...groups.entries()].map(([cat, list]) => (
-          <Card key={cat} style={col("var(--an-space-1)")}>
-            <CardHead title={cat} />
+        {catalog && catalog.length === 0 && catalogError ? <Empty icon="list" text={catalogError} /> : null}
+        {catalog && catalog.length > 0 && items.length === 0 ? <Empty icon="search" text="Ничего не нашлось." /> : null}
+        {groups.map(([src, list]) => (
+          <Card key={src} style={col("var(--an-space-1)")}>
+            <CardHead title={src} />
             {list.map((e) => {
               const cur = local[e.id] ?? e.selected
               const used = usedBy.get(e.id)
@@ -102,8 +105,8 @@ function ListsPage() {
                   on={cur}
                   onClick={() => void toggle(e.id, cur)}
                   title={e.name}
-                  sub={used ? `в правилах: ${used.join(", ")}` : e.description}
-                  meta={e.count != null ? `${e.kind === "prefixes" ? "подсетей" : "доменов"}: ${fmtInt(e.count)}` : undefined}
+                  sub={used ? `в правилах: ${used.join(", ")}` : e.description ?? (e.downloaded ? `скачан ${fmtAgo(e.downloaded.updated)}` : undefined)}
+                  meta={catalogMeta(e)}
                 />
               )
             })}
@@ -116,114 +119,37 @@ function ListsPage() {
 
 // ── Свои списки ───────────────────────────────────────────────────────────────
 
-const splitLines = (s: string) =>
-  s
-    .split(/[\s,]+/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-
 function CustomPage() {
   const { back } = useNav()
-  const { toast, draft } = useStore()
-  const [items, setItems] = useState<CustomList[] | null>(null)
-  const [edit, setEdit] = useState<{ orig: string | null; name: string; domains: string; prefixes: string } | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [confirm, setConfirm] = useState(false)
-  const load = () =>
-    call("lists.custom")
-      .then((r) => setItems(Array.isArray(r) ? r : []))
-      .catch((e) => {
-        setItems([])
-        toast(errorText(e), "bad")
-      })
+  const { custom, reloadCustom } = useStore()
+  const [edit, setEdit] = useState<{ orig?: string; text: string } | null>(null)
   useEffect(() => {
-    void load()
-  }, [])
+    void reloadCustom()
+  }, [reloadCustom])
 
-  const usedBy = (name: string) => (draft?.channels ?? []).filter((c) => c.match.custom?.includes(name)).map((c) => c.name)
-
-  const save = async () => {
-    if (!edit) return
-    setBusy(true)
-    try {
-      await call("lists.custom", { put: { name: edit.name.trim(), domains: splitLines(edit.domains), prefixes: splitLines(edit.prefixes) } })
-      if (edit.orig && edit.orig !== edit.name.trim()) await call("lists.custom", { remove: edit.orig })
-      toast("Список сохранён")
-      setEdit(null)
-      await load()
-    } catch (e) {
-      toast(errorText(e), "bad")
-    } finally {
-      setBusy(false)
-    }
-  }
-  const remove = async () => {
-    if (!edit?.orig) return
-    setConfirm(false)
-    try {
-      await call("lists.custom", { remove: edit.orig })
-      setEdit(null)
-      await load()
-    } catch (e) {
-      toast(errorText(e), "bad")
-    }
-  }
-
-  if (edit) {
-    const nameErr = !edit.name.trim() ? "Нужно название" : items?.some((c) => c.name === edit.name.trim() && c.name !== edit.orig) ? "Такой список уже есть" : null
-    const used = edit.orig ? usedBy(edit.orig) : []
-    return (
-      <>
-        <Header title={edit.orig ?? "Новый список"} back={() => setEdit(null)} />
-        <Body>
-          <Card style={col("var(--an-space-6)")}>
-            <Field label="Название" error={edit.name ? nameErr : null}>
-              <Input value={edit.name} onInput={(e) => setEdit({ ...edit, name: e.currentTarget.value })} />
-            </Field>
-            <Field label="Домены" hint="по одному в строке">
-              <Textarea rows={5} value={edit.domains} placeholder="example.com" onInput={(e) => setEdit({ ...edit, domains: e.currentTarget.value })} autoCapitalize="none" spellCheck={false} />
-            </Field>
-            <Field label="Подсети" hint="по одной в строке">
-              <Textarea rows={4} value={edit.prefixes} placeholder="203.0.113.0/24" onInput={(e) => setEdit({ ...edit, prefixes: e.currentTarget.value })} autoCapitalize="none" spellCheck={false} />
-            </Field>
-            {used.length ? <div style={muted}>в правилах: {used.join(", ")}</div> : null}
-          </Card>
-          <Button tone="primary" full busy={busy} disabled={!!nameErr} onClick={save}>
-            Сохранить
-          </Button>
-          {edit.orig ? (
-            <Button tone="danger" full icon={<Icon name="trash" />} onClick={() => setConfirm(true)}>
-              Удалить список
-            </Button>
-          ) : null}
-        </Body>
-        <Dialog open={confirm} title={`Удалить «${edit.orig}»?`} confirmLabel="Удалить список" onConfirm={remove} onCancel={() => setConfirm(false)}>
-          {used.length ? `Правила ${used.map((n) => `«${n}»`).join(", ")} перестанут забирать его домены и подсети.` : "Список удалится с телефона."}
-        </Dialog>
-      </>
-    )
-  }
+  if (edit)
+    return <CustomEdit orig={edit.orig} initText={edit.text} onSaved={() => setEdit(null)} onBack={() => setEdit(null)} />
 
   return (
     <>
       <Header title="Свои списки" back={back} />
       <Body>
-        {!items ? <Skeleton height={56} count={3} /> : null}
-        {items && items.length === 0 ? <Empty icon="file" text="Своих списков нет" /> : null}
-        {items && items.length > 0 ? (
+        {!custom ? <Skeleton height={56} count={3} /> : null}
+        {custom && custom.length === 0 ? <Empty icon="file" text="Своих списков нет" /> : null}
+        {custom && custom.length > 0 ? (
           <Card style={col("var(--an-space-1)")}>
-            {items.map((c) => (
+            {custom.map((c) => (
               <TapRow
                 key={c.name}
                 icon="file"
                 title={c.name}
-                subtitle={`доменов: ${c.domains.length} · подсетей: ${c.prefixes.length}`}
-                onClick={() => setEdit({ orig: c.name, name: c.name, domains: c.domains.join("\n"), prefixes: c.prefixes.join("\n") })}
+                subtitle={customSub(c)}
+                onClick={() => setEdit({ orig: c.name, text: [...c.domains, ...c.prefixes].join("\n") })}
               />
             ))}
           </Card>
         ) : null}
-        <Button tone="secondary" full icon={<Icon name="plus" />} onClick={() => setEdit({ orig: null, name: "", domains: "", prefixes: "" })}>
+        <Button tone="secondary" full icon={<Icon name="plus" />} onClick={() => setEdit({ text: "" })}>
           Новый список
         </Button>
       </Body>
@@ -237,9 +163,11 @@ function SubCard({ s, onChange }: { s: Sub; onChange: (l: Sub[]) => void }) {
   const { toast, draft } = useStore()
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState(false)
-  const outs = Object.values(draft?.outputs ?? {}).filter((o) => o.sub === s.id).map((o) => o.name)
+  // Выходы — по черновику: выход, добавленный, но ещё не применённый, тоже держит подписку.
+  const outs = [...new Set([...(draft?.outputs ?? []).filter((o) => o.sub === s.id).map((o) => o.name), ...s.used_by])]
   const q = s.quota
-  const used = q ? q.up + q.down : 0
+  const used = q ? bytesOf(q.up) + bytesOf(q.down) : 0
+  const total = q ? bytesOf(q.total) : 0
   const refresh = async () => {
     setBusy(true)
     try {
@@ -263,34 +191,38 @@ function SubCard({ s, onChange }: { s: Sub; onChange: (l: Sub[]) => void }) {
   return (
     <Card style={col("var(--an-space-4)")}>
       <div style={col("2px")}>
-        <h2 style={{ font: "var(--an-text-heading)", ...ellipsis }}>{s.name}</h2>
-        <span style={{ ...mono, ...ellipsis, wordBreak: "normal" }}>{s.url}</span>
+        <h2 style={{ font: "var(--an-text-heading)", ...ellipsis }}>{s.name || "Подписка"}</h2>
+        {s.url ? <span style={{ ...mono, ...ellipsis, wordBreak: "normal" }}>{s.url}</span> : <span style={muted}>вставленные ссылки</span>}
       </div>
       <div style={col("var(--an-space-2)")}>
-        <KV k="узлов" v={s.nodes} />
-        <KV k="обновлена" v={fmtAgo(s.updated)} />
+        <KV k="узлов" v={s.skipped || s.foreign ? `${s.nodes} · не подходят: ${s.skipped + s.foreign}` : s.nodes} />
+        <KV k="обновлена" v={s.updated ? fmtAgo(s.updated) : "ещё не скачивалась"} />
         {outs.length ? <KV k="выходы" v={outs.join(", ")} /> : null}
         {q?.expire ? <KV k="действует до" v={<span style={{ color: expired ? "var(--an-danger-ink)" : undefined }}>{fmtDate(q.expire)}</span>} /> : null}
       </div>
-      {q && (q.total > 0 || used > 0) ? (
+      {q && (total > 0 || used > 0) ? (
         <div style={col("var(--an-space-3)")}>
-          {q.total > 0 ? <Meter value={Math.min(100, (used / q.total) * 100)} tone={used / q.total > 0.9 ? "warn" : "accent"} height={8} /> : null}
+          {total > 0 ? <Meter value={Math.min(100, (used / total) * 100)} tone={used / total > 0.9 ? "warn" : "accent"} height={8} /> : null}
           <span className="sp-tab" style={muted}>
             израсходовано: {fmtBytes(used)}
-            {q.total > 0 ? ` из ${fmtBytes(q.total)}` : " · объём не ограничен"}
+            {total > 0 ? ` из ${fmtBytes(total)}` : " · объём не ограничен"}
           </span>
         </div>
       ) : null}
+      {s.warn ? <Callout tone="warn" title="Панель подписки" verbatim={s.warn} /> : null}
       <div style={{ display: "flex", gap: "var(--an-space-3)" }}>
-        <Button tone="secondary" icon={<Icon name="refresh" />} busy={busy} onClick={refresh} style={{ flex: 1 }}>
-          {busy ? "Обновляем…" : "Обновить"}
-        </Button>
-        <Button tone="danger" icon={<Icon name="trash" />} onClick={() => setConfirm(true)} style={{ flex: 1 }}>
+        {s.kind === "url" ? (
+          <Button tone="secondary" icon={<Icon name="refresh" />} busy={busy} onClick={refresh} style={{ flex: 1 }}>
+            {busy ? "Обновляем…" : "Обновить"}
+          </Button>
+        ) : null}
+        <Button tone="danger" icon={<Icon name="trash" />} disabled={outs.length > 0} onClick={() => setConfirm(true)} style={{ flex: 1 }}>
           Удалить
         </Button>
       </div>
+      {outs.length ? <div style={muted}>Чтобы удалить подписку, уберите выходы с ней.</div> : null}
       <Dialog open={confirm} title={`Удалить «${s.name}»?`} confirmLabel="Удалить подписку" onConfirm={remove} onCancel={() => setConfirm(false)}>
-        {outs.length ? `Выходы ${outs.join(", ")} останутся без узлов, и правила через них перестанут работать.` : "Узлы этой подписки удалятся с телефона."}
+        Узлы этой подписки удалятся с телефона.
       </Dialog>
     </Card>
   )
@@ -312,8 +244,8 @@ function SubsPage() {
   }, [toast])
   const add = async () => {
     const u = url.trim()
-    if (!/^(https?|vless):\/\//i.test(u)) {
-      setErr("Нужна ссылка https://… на подписку или vless://")
+    if (!/^https?:\/\//i.test(u) && !u.includes("vless://")) {
+      setErr("Нужна ссылка на подписку https://… или ссылки vless://")
       return
     }
     setAdding(true)
@@ -337,8 +269,8 @@ function SubsPage() {
         {subs?.map((s) => <SubCard key={s.id} s={s} onChange={setSubs} />)}
         <Card style={col("var(--an-space-4)")}>
           <CardHead title="Новая подписка" />
-          <Field label="Ссылка" error={err}>
-            <Input mono value={url} placeholder="https://… или vless://…" onInput={(e) => setUrl(e.currentTarget.value)} invalid={!!err} autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="url" />
+          <Field label="Ссылка" hint="на подписку или сами ссылки vless://, по одной в строке" error={err}>
+            <Textarea rows={3} mono value={url} placeholder="https://… или vless://…" onInput={(e) => setUrl(e.currentTarget.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
           </Field>
           <Button tone="primary" full icon={<Icon name="plus" />} busy={adding} disabled={!url.trim()} onClick={add}>
             {adding ? "Скачиваем…" : "Добавить"}
@@ -353,7 +285,7 @@ function SubsPage() {
 
 function BackupPage() {
   const { back } = useNav()
-  const { toast, setDraft } = useStore()
+  const { toast, loadDraft, reloadCustom, reloadCatalog } = useStore()
   const [exporting, setExporting] = useState(false)
   const [pending, setPending] = useState<{ name: string; json: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -362,7 +294,8 @@ function BackupPage() {
     setExporting(true)
     try {
       const r = await call("backup.export")
-      toast(`Сохранено: ${r.file}`)
+      // saved ставит оболочка после «Сохранить как»: false — окно закрыли, это не ошибка.
+      if (r.saved !== false) toast(`Сохранено: ${r.name}`)
     } catch (e) {
       toast(errorText(e), "bad")
     } finally {
@@ -384,7 +317,9 @@ function BackupPage() {
       // Загруженное сохранено, но не применено: черновик получает модель из файла, и
       // пилюля показывает, сколько правил и выходов поменяется при применении.
       const m = await call("settings.get")
-      setDraft(() => m)
+      loadDraft(m)
+      void reloadCustom()
+      void reloadCatalog()
       toast("Загружено · примените правила")
     } catch (e) {
       setErr(errorText(e))
@@ -396,7 +331,8 @@ function BackupPage() {
       <Body>
         <Card style={col("var(--an-space-4)")}>
           <CardHead title="Сохранить в файл" />
-          <div style={muted}>правила, выходы, подписки и выбранные списки</div>
+          <div style={muted}>правила, выходы, подписки и списки</div>
+          <div style={muted}>В файле — доступ ко всем подключениям подписок: не выкладывайте его в чаты и общие папки.</div>
           <Button tone="secondary" full icon={<Icon name="download" />} busy={exporting} onClick={exp}>
             Сохранить
           </Button>
@@ -488,15 +424,11 @@ function EnginePage() {
 
 export function More() {
   const { route, open } = useNav()
-  const { catalog, catalogUpdated, engine } = useStore()
+  const { catalog, catalogInfo, engine, custom, draft, saveSetting } = useStore()
   const [subs, setSubs] = useState<Sub[] | null>(null)
-  const [custom, setCustom] = useState<number | null>(null)
   useEffect(() => {
     if (route.sub) return
     call("subs.list").then(setSubs).catch(() => {})
-    call("lists.custom")
-      .then((r) => setCustom(Array.isArray(r) ? r.length : null))
-      .catch(() => {})
   }, [route.sub])
 
   switch ((route.sub as SubRoute | undefined)?.kind) {
@@ -513,6 +445,8 @@ export function More() {
   }
 
   const sel = catalog?.filter((e) => e.selected).length
+  const last = catalogInfo?.last_update?.at
+  const unmetered = draft?.update.unmetered_only ?? true
   return (
     <>
       <Header title="Ещё" />
@@ -521,11 +455,11 @@ export function More() {
           <TapRow
             icon="list"
             title="Списки"
-            subtitle={catalog ? `выбрано: ${sel} из ${catalog.length} · ${catalogUpdated ? `обновлены ${fmtAgo(catalogUpdated)}` : "не скачаны"}` : undefined}
+            subtitle={catalog ? `выбрано: ${sel} из ${catalog.length} · ${last ? `обновлены ${fmtAgo(last)}` : "ещё не обновлялись"}` : undefined}
             onClick={() => open({ kind: "lists" })}
           />
           <Divider />
-          <TapRow icon="file" title="Свои списки" subtitle={custom != null ? `списков: ${custom}` : undefined} onClick={() => open({ kind: "custom" })} />
+          <TapRow icon="file" title="Свои списки" subtitle={custom ? `списков: ${custom.length}` : undefined} onClick={() => open({ kind: "custom" })} />
           <Divider />
           <TapRow
             icon="link"
@@ -538,6 +472,20 @@ export function More() {
           <TapRow icon="archive" title="Резервная копия" subtitle="сохранить и загрузить настройки" onClick={() => open({ kind: "backup" })} />
           <Divider />
           <TapRow icon="diag" title="Движок" subtitle={engine ? `версия ${engine.version || "—"}` : undefined} onClick={() => open({ kind: "engine" })} />
+        </Card>
+        <Card style={col("var(--an-space-3)")}>
+          <CardHead title="Обновление списков и подписок" meta="раз в сутки" />
+          <div style={{ ...rowS("var(--an-space-6)"), justifyContent: "space-between", minHeight: 44 }}>
+            <span style={{ font: "var(--an-text-body-sm)" }}>Только без лимитной сети</span>
+            <Switch
+              size="lg"
+              label="Только без лимитной сети"
+              checked={unmetered}
+              disabled={!draft}
+              onChange={() => void saveSetting({ update: { unmetered_only: !unmetered } })}
+            />
+          </div>
+          <div style={muted}>{unmetered ? "по мобильной сети и лимитному Wi-Fi не обновляются" : "обновляются в любой сети"}</div>
         </Card>
       </Body>
     </>

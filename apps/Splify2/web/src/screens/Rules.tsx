@@ -9,23 +9,23 @@ import { useStore, useListInfo } from "../store"
 import { useNav } from "../nav"
 import { Body, Empty, Header, col, ellipsis, muted, rowS } from "../ui"
 import { Icon } from "../icons"
-import { WHO_TEXT, matchText } from "../format"
+import { WHO_TEXT, findOutput, matchText } from "../format"
 import type { Model, ModelChannel } from "../types"
 import { RuleEditor } from "./RuleEditor"
 import { useAppLabels } from "../apps"
 
 function whoText(c: ModelChannel, appLabel: (uid: number) => string): string {
-  if (c.who === "apps") {
-    const u = c.uids ?? []
+  if (c.who.kind === "apps") {
+    const u = c.who.uids
     if (u.length === 0) return "приложения не выбраны"
     if (u.length <= 2) return u.map(appLabel).join(", ")
     return `приложений: ${u.length}`
   }
-  return WHO_TEXT[c.who] ?? c.who
+  return WHO_TEXT[c.who.kind]
 }
 
 function outText(model: Model, out: string): string {
-  const o = model.outputs[out]
+  const o = findOutput(model, out)
   if (!o) return `${out} (нет такого выхода)`
   return o.kind === "direct" ? "напрямую" : out
 }
@@ -57,7 +57,7 @@ function RuleRow({
     })
   const toggle = () =>
     setDraft((m) => {
-      m.channels[i].enabled = off ? true : false
+      m.channels[i].enabled = off
       return m
     })
   return (
@@ -115,7 +115,7 @@ function RuleRow({
 
 export function Rules() {
   const { route, open } = useNav()
-  const { draft, modelError, applyError } = useStore()
+  const { draft, modelError, applyError, applyNotes } = useStore()
   const [ordering, setOrdering] = useState(false)
   const [labels] = useAppLabels()
 
@@ -138,6 +138,15 @@ export function Rules() {
         {applyError ? (
           <Callout tone="danger" title="Не применилось" verbatim={applyError.message}>
             {applyError.rolledBack ? <div style={muted}>работают прежние правила</div> : null}
+          </Callout>
+        ) : null}
+        {applyNotes.length ? (
+          <Callout tone="warn" title="Применено, но не всё" count={applyNotes.length}>
+            <div style={col("var(--an-space-3)")}>
+              {applyNotes.map((n, i) => (
+                <div key={i} style={{ font: "var(--an-text-body-sm)", color: "var(--an-text)" }}>{n}</div>
+              ))}
+            </div>
           </Callout>
         ) : null}
         {modelError ? <Empty icon="rules" text={modelError} /> : null}

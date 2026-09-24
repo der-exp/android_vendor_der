@@ -16,23 +16,33 @@ fs.mkdirSync(outDir, { recursive: true })
 const settle = (page, ms = 900) => page.waitForTimeout(ms)
 
 /** Экраны: имя файла, адрес, действия после загрузки. */
+const openRule = (name) => async (p) => { await p.getByText(name, { exact: true }).click(); await settle(p, 400) }
+const more = (item) => async (p) => { await p.getByText(item, { exact: true }).click(); await settle(p) }
+
 const screens = [
   { name: "01-home", q: "?tab=home" },
   { name: "02-outputs", q: "?tab=outputs", after: async (p) => { await p.getByRole("button", { name: "Замерить" }).first().click(); await settle(p, 2200) } },
   { name: "03-rules", q: "?tab=rules" },
-  { name: "04-rule-editor", q: "?tab=rules", after: async (p) => { await p.getByText("Банки напрямую", { exact: true }).click(); await settle(p) } },
-  { name: "05-rule-apps-picker", q: "?tab=rules", after: async (p) => { await p.getByText("Банки напрямую", { exact: true }).click(); await settle(p, 400); await p.getByRole("button", { name: "Изменить выбор" }).click(); await settle(p) } },
+  { name: "04-rule-editor", q: "?tab=rules", after: openRule("Банки напрямую") },
+  { name: "05-rule-apps-picker", q: "?tab=rules", after: async (p) => { await openRule("Банки напрямую")(p); await p.getByRole("button", { name: "Изменить выбор" }).click(); await settle(p) } },
   { name: "06-rules-pending", q: "?tab=rules", after: async (p) => { await p.getByRole("button", { name: "Порядок" }).click(); await p.getByRole("button", { name: "Ниже" }).first().click(); await settle(p, 500) } },
   { name: "07-rules-apply-failed", q: "?tab=rules&apply=fail", after: async (p) => { await p.getByRole("switch").last().click(); await settle(p, 300); await p.getByRole("button", { name: /Применить/ }).click(); await settle(p, 1800) } },
-  { name: "08-conns-empty", q: "?tab=conns" },
-  { name: "09-conns-data", q: "?tab=conns&conns=1", after: async (p) => { await p.getByPlaceholder(/youtube/).fill("youtube.com"); await p.getByRole("button", { name: "Проверить" }).click(); await settle(p) } },
-  { name: "10-dns-data", q: "?tab=conns&conns=1", after: async (p) => { await p.getByRole("button", { name: "Имена" }).click(); await settle(p) } },
+  { name: "08-conns", q: "?tab=conns", after: async (p) => { await p.getByPlaceholder(/youtube/).fill("youtube.com"); await p.getByRole("button", { name: "Проверить" }).click(); await settle(p) } },
+  { name: "09-conns-missing", q: "?tab=conns&conns=0" },
+  { name: "10-dns", q: "?tab=conns", after: async (p) => { await p.getByRole("button", { name: "Имена" }).click(); await settle(p) } },
   { name: "11-more", q: "?tab=more" },
-  { name: "12-more-lists", q: "?tab=more", after: async (p) => { await p.getByText("Списки", { exact: true }).click(); await settle(p) } },
-  { name: "13-more-subs", q: "?tab=more", after: async (p) => { await p.getByText("Подписки", { exact: true }).click(); await settle(p) } },
-  { name: "14-more-backup", q: "?tab=more", after: async (p) => { await p.getByText("Резервная копия", { exact: true }).click(); await settle(p) } },
-  { name: "15-more-engine", q: "?tab=more", after: async (p) => { await p.getByText("Движок", { exact: true }).click(); await settle(p, 300); await p.getByRole("button", { name: "Проверить" }).click(); await settle(p, 1200) } },
+  { name: "12-more-lists", q: "?tab=more", after: more("Списки") },
+  { name: "13-more-subs", q: "?tab=more", after: more("Подписки") },
+  { name: "14-more-backup", q: "?tab=more", after: more("Резервная копия") },
+  { name: "15-more-engine", q: "?tab=more", after: async (p) => { await more("Движок")(p); await p.getByRole("button", { name: "Проверить" }).click(); await settle(p, 1200) } },
   { name: "16-home-engine-down", q: "?tab=home&engine=down" },
+  { name: "17-rule-lists-picker", q: "?tab=rules", after: async (p) => { await openRule("YouTube")(p); await p.getByRole("button", { name: "Изменить списки" }).click(); await settle(p) } },
+  { name: "18-rule-new-list", q: "?tab=rules", after: async (p) => { await openRule("YouTube")(p); await p.getByRole("button", { name: "Свои домены и подсети" }).click(); await settle(p) } },
+  { name: "19-more-custom", q: "?tab=more", after: more("Свои списки") },
+  { name: "20-more-custom-edit", q: "?tab=more", after: async (p) => { await more("Свои списки")(p); await p.getByText("work", { exact: true }).click(); await settle(p) } },
+  { name: "21-dns-add-rule", q: "?tab=conns", after: async (p) => { await p.getByRole("button", { name: "Имена" }).click(); await settle(p); await p.getByRole("button", { name: "Добавить правило" }).first().click(); await settle(p) } },
+  { name: "22-home-off", q: "?tab=home", after: async (p) => { await p.getByRole("switch", { name: "Маршрутизация" }).click(); await settle(p, 1200) } },
+  { name: "23-new-rule", q: "?tab=rules", after: async (p) => { await p.getByRole("button", { name: "Новое правило" }).click(); await settle(p, 300); await p.getByRole("button", { name: "Добавить правило" }).click(); await settle(p, 300) } },
 ]
 
 const browser = await chromium.launch()
@@ -48,7 +58,9 @@ for (const scheme of ["light", "dark"]) {
       page.on("console", (m) => m.type() === "error" && !m.text().includes("ERR_NAME_NOT_RESOLVED") && errors.push(m.text()))
       await page.goto(base + "/" + s.q)
       await settle(page)
-      if (s.after) await s.after(page)
+      // Шаг не удался (кнопку переименовали, экран не открылся) — это находка, а не повод
+      // оборвать все остальные снимки.
+      if (s.after) await s.after(page).catch((e) => problems.push(`${scheme} ${width} ${s.name}: шаг не выполнен: ${String(e).split("\n")[0]}`))
       const overflow = await page.evaluate(() => {
         const w = document.documentElement.clientWidth
         const wide = [...document.querySelectorAll("body *")].filter((el) => el.getBoundingClientRect().right > w + 0.5 && getComputedStyle(el).position !== "fixed")

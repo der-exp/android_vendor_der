@@ -1,15 +1,15 @@
 /**
  * Типы ответов моста (apps/Splify2/BRIDGE.md, версия 1).
  *
- * Две группы. Ответы движка (`engine.*`) — то, что печатает steer, дословно: форма
- * `steer status` здесь та же, что у splify2 на роутере (splify2/ui/src/lib/model.ts),
- * урезанная до полей, которые читает экран телефона. Лишние поля движка терпим, а не
- * требуем: движок и экран обновляются порознь.
- *
- * Модель настроек (`settings.get`/`settings.put`) принадлежит логике (logic/Model.kt).
- * Пока её схемы в дереве нет, форма ниже — предложение экрана, повторяющее понятия спеки;
- * экран сохраняет поля, которых не знает (`[k: string]: unknown`), и отдаёт модель обратно
- * целиком, поэтому расширение модели на стороне логики его не ломает.
+ * Три группы, у каждой свой источник правды:
+ *   - `engine.*` — то, что печатает движок, дословно (steer/docs/ctl.md и вывод его команд):
+ *     форма `steer status` та же, что у splify2 на роутере (splify2/ui/src/lib/model.ts),
+ *     урезанная до полей, которые читает экран телефона. Лишние поля движка терпим, а не
+ *     требуем: движок и экран обновляются порознь;
+ *   - модель настроек и методы `settings`, `spec`, `lists`, `subs`, `backup` — логика
+ *     (src/com/der/splify2/logic, форма модели — в шапке Model.kt). Логику проверяет стенд
+ *     против настоящего движка, поэтому экран подстраивается под неё, а не наоборот;
+ *   - `system.*`, `apps.*` — оболочка.
  */
 
 // ── Конверт моста ─────────────────────────────────────────────────────────────
@@ -35,17 +35,18 @@ export interface EngineState {
   version: string
 }
 
-export type OutputKind = "interface" | "direct" | "vless" | "xsteer" | "zapret"
-export type OnFail = "drop" | "direct" | "zapret"
+/** Виды выходов на телефоне (Model.kt, OutKind). zapret и xsteer здесь нет — решение владельца. */
+export type OutputKind = "interface" | "direct" | "vless" | "tgws"
+export type OnFail = "drop" | "direct"
 
 /** Выход в ответе `steer status`. */
 export interface OutputStatus {
   name: string
-  kind: OutputKind
+  kind: OutputKind | string
   up?: boolean
   device?: string
   devices?: string[]
-  on_fail?: OnFail
+  on_fail?: string
   sub_file?: string
   node?: number
   nodes?: number[]
@@ -91,7 +92,7 @@ export interface Diag {
   fail: number
 }
 
-/** Узел подписки, как его видит движок; `index` — то же число, что `nodes` спеки. */
+/** Узел подписки, как его видит движок; `index` — то же число, что `nodes` выхода. */
 export interface VlessNode {
   index: number
   name: string
@@ -125,47 +126,65 @@ export interface VlessProbe {
   why: string
 }
 
+/** `steer vless-probe` (src/ext/tunnel.c): замер — `{output, sub_file, results, working}`;
+ *  замерять нечего (нет узлов, нет такого узла) — `{ok:false, error}`. */
 export interface VlessProbeReply {
   output?: string
+  sub_file?: string
   results?: VlessProbe[]
   working?: number
+  ok?: false
   error?: string
 }
 
 /** `engine.explain`: JSON движка как есть, либо `{text}`, если ответ не JSON. */
 export type ExplainReply = { text: string } | Record<string, unknown>
 
-/**
- * Соединение (`engine.conns`, появится с командой `conns` сокета). Формы в договоре ещё
- * нет; разбор (`parseConns` в lib/parse.ts) терпит и массив, и `{conns:[…]}`, и
- * отсутствие любого поля кроме адреса назначения.
- */
+/** Соединение из `steer conns` (ctl.md, «conns»): conntrack с меткой движка. Приложения и
+ *  имени, под которым спросили адрес, здесь нет — conntrack их не хранит. */
 export interface Conn {
+  family: "ipv4" | "ipv6"
   proto: string
+  src: string
+  sport?: number
   dst: string
   dport?: number
-  src?: string
-  sport?: number
-  /** Имя, под которым приложение спросило адрес (из журнала резолвера), если известно. */
-  host?: string
-  uid?: number
-  channel?: string
-  out?: string
+  mark?: string
+  /** Выход по реестру меток применённой спеки; null — выход уже убран, соединение доживает. */
+  out: string | null
+  state?: string
+  packets?: number
   bytes?: number
-  /** Сколько секунд живёт соединение. */
-  age?: number
+  reply_packets?: number
+  reply_bytes?: number
 }
 
-/** Запрос имени (`engine.dnsLog`, появится с командой `dns-log` сокета). */
-export interface DnsEntry {
-  /** unix-время запроса */
-  at: number
+export interface ConnsReply {
+  schema: number
+  conns: Conn[]
+  shown: number
+  total: number
+  truncated: boolean
+}
+
+/** Имя из журнала резолвера (`steer dns-log`): куда попало при последнем запросе. */
+export interface DnsName {
   name: string
-  qtype?: string
-  uid?: number
-  channel?: string
-  out?: string
-  answers?: string[]
+  /** Правило; null — имя не попало ни в одно доменное правило. */
+  channel: string | null
+  out: string | null
+  count: number
+  last: number
+  /** Сколько секунд назад спрашивали последний раз. */
+  ago: number
+}
+
+export interface DnsLogReply {
+  schema: number
+  /** false — резолвер не запущен (маршрутизация выключена или правил по доменам нет). */
+  running: boolean
+  size: number
+  names: DnsName[]
 }
 
 // ── system ────────────────────────────────────────────────────────────────────
@@ -197,93 +216,119 @@ export interface AppInfo {
   shared: string[]
 }
 
-// ── settings / spec ───────────────────────────────────────────────────────────
+// ── Модель настроек (logic/Model.kt) ─────────────────────────────────────────
 
-/** Выход в модели. `sub` — id подписки (subs.list), а не файл: файл — дело логики. */
+/** Выход. `direct` в модели не заводится — «напрямую» есть всегда (out: "direct"). */
 export interface ModelOutput {
   name: string
   kind: OutputKind
-  /** Подпись для человека: «Нидерланды», «свой WireGuard». */
-  title?: string
-  sub?: string
-  /** vless: выбранные узлы по предпочтению; пусто — первый рабочий. */
-  nodes?: number[]
+  /** interface: устройства по предпочтению — первое здоровое забирает трафик. */
   devices?: string[]
   on_fail?: OnFail
-  [k: string]: unknown
+  /** vless: id подписки (Model.subs, subs.list). */
+  sub?: string
+  /** vless: номера узлов по предпочтению; пусто — первый рабочий. */
+  nodes?: number[]
+  /** tgws: имя за Cloudflare для моста Telegram. */
+  domain?: string
 }
 
-/** Кому правило: весь телефон (`from:"self"`), приложения (`from:"uid:N"`), раздача. */
-export type Who = "phone" | "apps" | "tether"
+/** Кому правило: весь телефон (from:"self"), приложения (from:"uid:N"), раздача
+ *  (from пуст — все устройства раздачи; иначе адреса, подсети или MAC). */
+export type Who = { kind: "phone" } | { kind: "apps"; uids: number[] } | { kind: "tether"; from: string[] }
 
-export interface ModelMatch {
-  /** Весь трафик. */
-  any?: boolean
-  /** id списков каталога (lists.catalog). */
-  lists?: string[]
+export type WhoKind = Who["kind"]
+
+export interface What {
+  /** id служб каталога (lists.catalog → items[].id). */
+  lists: string[]
   /** имена своих списков (lists.custom). */
-  custom?: string[]
-  domains?: string[]
-  prefixes?: string[]
+  custom: string[]
+  /** Весь трафик — вместо списков. */
+  all: boolean
 }
 
 export interface ModelChannel {
   name: string
-  enabled?: boolean
+  enabled: boolean
   who: Who
-  /** who=apps: uid приложений. */
-  uids?: number[]
-  match: ModelMatch
-  /** Имя выхода. */
+  what: What
+  /** Имя выхода или "direct". */
   out: string
-  [k: string]: unknown
+}
+
+export interface ModelCustom {
+  name: string
+  domains: string[]
+  prefixes: string[]
+}
+
+export interface ModelSub {
+  id: string
+  name: string
+  url?: string
+  kind: "url" | "links"
 }
 
 export interface Model {
-  outputs: Record<string, ModelOutput>
+  version: number
+  outputs: ModelOutput[]
   /** Сверху вниз: первое совпадение побеждает. */
   channels: ModelChannel[]
-  [k: string]: unknown
+  /** Выбранные службы каталога — их списки обновляются, даже если правила на них ещё нет. */
+  lists: string[]
+  custom: ModelCustom[]
+  /** Только своими методами subs.*: settings.put подписки не добавляет и не удаляет. */
+  subs: ModelSub[]
+  tether: { devices: string[] }
+  catalog_url: string | null
+  update: { unmetered_only: boolean }
 }
 
+/** settings.put: модель целиком или её часть — чего нет в запросе, остаётся как было. */
+export type ModelPatch = Partial<Omit<Model, "subs">> & { subs?: Pick<ModelSub, "id" | "name">[] }
+
 export interface ApplyResult {
+  /** Правила стоят. */
   applied: boolean
+  /** Движок сохранил настройку (при выключенном движке — только сохранил). */
+  saved: boolean
   rolled_back?: boolean
   message?: string
+  /** Что пропущено при сборке: список ещё не скачан, правилу нечего забирать. */
+  warnings?: string[]
 }
 
 export interface SpecPreview {
   spec: Record<string, unknown>
-  check: { code: number; stderr: string }
+  check: { code: number; stderr: string; error?: string }
+  warnings: string[]
+  needs_local_dns: boolean
 }
 
 // ── lists ─────────────────────────────────────────────────────────────────────
 
-export interface CatalogEntry {
+export type ListKind = "domains" | "prefixes"
+
+/** Служба каталога splify2-lists: одна строка на экране, за ней — файлы доменов и подсетей. */
+export interface CatalogItem {
   id: string
   name: string
   description?: string
-  kind: "domains" | "prefixes"
-  /** Раздел каталога: «Видео», «Мессенджеры»… */
-  category?: string
-  /** записей */
+  /** Издатель: «itdoginfo (allow-domains)». */
+  source?: string
+  kinds: ListKind[]
+  /** Записей по каталогу (у наборов издателя бывает не названо). */
   count?: number
-  /** unix-время файла */
-  updated?: number
+  tag?: string
+  default_on: boolean
   selected: boolean
-}
-
-/** Каталог целиком. Ответ-массив разбор сводит к `{lists}`. */
-export interface Catalog {
-  lists: CatalogEntry[]
-  /** когда каталог обновлялся, unix-время */
-  updated?: number
-}
-
-export interface CustomList {
-  name: string
-  domains: string[]
-  prefixes: string[]
+  /** Есть в правилах (сохранённых). */
+  used: boolean
+  /** Скачано на телефон: записей и когда (unix-время). */
+  downloaded?: { count: number; updated: number }
+  /** Подсети службы сужены протоколом и портами. */
+  narrow?: { proto: string | null; ports: string[] }
 }
 
 export interface ListsUpdated {
@@ -292,23 +337,82 @@ export interface ListsUpdated {
   message?: string
 }
 
+export interface Catalog {
+  version: string
+  /** Когда скачан сам каталог, unix-время; 0 — ещё не скачивался. */
+  updated: number
+  /** Итог последнего обновления списков (at — когда). */
+  last_update: (ListsUpdated & { at?: number }) | null
+  items: CatalogItem[]
+}
+
+export interface CustomList {
+  name: string
+  domains: string[]
+  prefixes: string[]
+  used?: boolean
+}
+
+/** lists.custom put: имя и строки. `text` логика сама делит на домены и подсети. */
+export interface CustomPut {
+  name: string
+  text?: string
+  domains?: string[]
+  prefixes?: string[]
+}
+
+export interface CustomPutReply {
+  saved: true
+  domains: number
+  prefixes: number
+  /** Строк, не похожих ни на домен, ни на подсеть. */
+  dropped: number
+}
+
 // ── subs ──────────────────────────────────────────────────────────────────────
+
+/** Остаток по заголовку subscription-userinfo. Байты — строками (JSON-число в JavaScript
+ *  точно только до 2^53); total "" — объём не назван; expire 0 — срок не назван. */
+export interface Quota {
+  up: string
+  down: string
+  total: string
+  expire: number
+  at?: number
+}
 
 export interface Sub {
   id: string
   name: string
-  url: string
+  kind: "url" | "links"
+  /** Только у подписки по ссылке; у вставленных ссылок vless:// её нет. */
+  url?: string
+  /** Пригодных узлов. */
   nodes: number
-  /** unix-время последнего обновления, 0 — ещё не скачивалась */
+  /** unix-время последнего скачивания; 0 — ещё не скачивалась. */
   updated: number
-  /** Остаток по заголовку subscription-userinfo: байты и unix-время; 0 — не названо. */
-  quota?: { up: number; down: number; total: number; expire: number }
+  skipped: number
+  foreign: number
+  /** Выходы, которые её используют. */
+  used_by: string[]
+  hwid: string
+  quota?: Quota
+  /** Что сказала панель об устройстве — готовая фраза. */
+  warn?: string
+  /** Страница поставщика. */
+  link?: string
+  /** Почему узлы не подошли: причина → сколько. */
+  reasons?: Record<string, number>
 }
 
 // ── backup ────────────────────────────────────────────────────────────────────
 
 export interface BackupExport {
   file: string
+  name: string
+  bytes: number
+  /** Ставит оболочка после «Сохранить как»: false — человек закрыл окно. */
+  saved?: boolean
 }
 
 // ── Карта методов: имя → [аргументы, результат] ─────────────────────────────
@@ -320,22 +424,22 @@ export interface Methods {
   "engine.diag": [void, Diag]
   "engine.explain": [{ q: string }, ExplainReply]
   "engine.vlessNodes": [{ out: string }, VlessNodesReply]
-  "engine.vlessProbe": [{ out: string; node?: string }, VlessProbeReply]
-  "engine.conns": [void, unknown]
-  "engine.dnsLog": [void, unknown]
+  "engine.vlessProbe": [{ out: string; node?: number }, VlessProbeReply]
+  "engine.conns": [void, ConnsReply]
+  "engine.dnsLog": [void, DnsLogReply]
   "system.network": [void, NetworkInfo]
   "system.privateDns": [void, PrivateDns]
   "apps.list": [{ system?: boolean } | void, AppInfo[]]
   "settings.get": [void, Model]
-  "settings.put": [Model, { saved: true }]
+  "settings.put": [ModelPatch, { saved: true }]
   "spec.preview": [void, SpecPreview]
   "spec.apply": [void, ApplyResult]
-  "lists.catalog": [void, Catalog | CatalogEntry[]]
+  "lists.catalog": [void, Catalog]
   "lists.select": [{ id: string; on: boolean }, { saved: true }]
-  "lists.update": [{ force?: boolean } | void, { started: true }]
-  "lists.custom": [{ put: CustomList } | { remove: string } | void, CustomList[] | { saved: true }]
+  "lists.update": [{ force?: boolean } | void, { started: boolean; running?: boolean }]
+  "lists.custom": [{ put: CustomPut } | { remove: string } | void, CustomList[] | CustomPutReply | { saved: true }]
   "subs.list": [void, Sub[]]
-  "subs.add": [{ url: string }, Sub[]]
+  "subs.add": [{ url: string; name?: string }, Sub[]]
   "subs.remove": [{ id: string }, Sub[]]
   "subs.refresh": [{ id?: string } | void, Sub[]]
   "backup.export": [void, BackupExport]

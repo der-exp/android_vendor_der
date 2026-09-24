@@ -26,7 +26,7 @@ export function Header({ title, back, right }: { title: ReactNode; back?: () => 
         alignItems: "center",
         gap: "var(--an-space-3)",
         minHeight: 56,
-        padding: "calc(env(safe-area-inset-top, 0px) + 6px) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left))",
+        padding: "calc(var(--sp-inset-top) + 6px) max(16px, var(--sp-inset-right)) 6px max(16px, var(--sp-inset-left))",
         background: "color-mix(in srgb, var(--an-surface-page) 86%, transparent)",
         backdropFilter: "blur(8px)",
         WebkitBackdropFilter: "blur(8px)",
@@ -55,7 +55,7 @@ export function Body({ children, bottom = true }: { children: ReactNode; bottom?
     <main
       style={{
         ...col(),
-        padding: `14px max(16px, env(safe-area-inset-right)) ${bottom ? "calc(var(--sp-nav-h) + env(safe-area-inset-bottom, 0px) + 84px)" : "calc(env(safe-area-inset-bottom, 0px) + 24px)"} max(16px, env(safe-area-inset-left))`,
+        padding: `14px max(16px, var(--sp-inset-right)) ${bottom ? "calc(var(--sp-nav-h) + var(--sp-inset-bottom) + 84px)" : "calc(var(--sp-inset-bottom) + 24px)"} max(16px, var(--sp-inset-left))`,
       }}
     >
       {children}

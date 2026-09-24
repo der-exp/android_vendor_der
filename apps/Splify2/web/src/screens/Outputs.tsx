@@ -11,7 +11,7 @@ import { useNav } from "../nav"
 import { call, errorText } from "../bridge"
 import { Body, CardHead, Divider, Empty, Header, KV, Segmented, col, ellipsis, muted, rowS } from "../ui"
 import { Icon } from "../icons"
-import { KIND_TEXT, ON_FAIL_TEXT, outputState, usedOutputs, type Tone } from "../format"
+import { ON_FAIL_TEXT, outputState, outputSub, usedOutputs, type Tone } from "../format"
 import type { ModelOutput, OnFail, OutputStatus, Sub, VlessNodesReply, VlessProbe } from "../types"
 
 const TONE_BADGE: Record<Tone, "success" | "warn" | "danger" | "neutral"> = { ok: "success", warn: "warn", bad: "danger", off: "neutral" }
@@ -46,9 +46,11 @@ function VlessNodes({ o, st }: { o: ModelOutput; st?: OutputStatus }) {
     setProbing(true)
     try {
       const r = await call("engine.vlessProbe", { out: o.name })
-      setProbe(new Map((r.results ?? []).map((p) => [p.index, p])))
-      setOrder("delay")
-      if (r.error) setErr(r.error)
+      if (r.results) {
+        setProbe(new Map(r.results.map((p) => [p.index, p])))
+        setOrder("delay")
+        setErr(null)
+      } else setErr(r.error || "Замер не удался")
     } catch (e) {
       setErr(errorText(e))
     } finally {
@@ -58,14 +60,17 @@ function VlessNodes({ o, st }: { o: ModelOutput; st?: OutputStatus }) {
 
   const toggle = (idx: number) =>
     setDraft((m) => {
-      const out = m.outputs[o.name]
-      const cur = out.nodes ?? []
-      out.nodes = cur.includes(idx) ? cur.filter((n) => n !== idx) : [...cur, idx]
+      const out = m.outputs.find((x) => x.name === o.name)
+      if (out) {
+        const cur = out.nodes ?? []
+        out.nodes = cur.includes(idx) ? cur.filter((n) => n !== idx) : [...cur, idx]
+      }
       return m
     })
   const firstWorking = () =>
     setDraft((m) => {
-      m.outputs[o.name].nodes = []
+      const out = m.outputs.find((x) => x.name === o.name)
+      if (out) out.nodes = []
       return m
     })
 
@@ -218,7 +223,7 @@ function OutputCard({ o, subs }: { o: ModelOutput; subs: Sub[] | null }) {
   const remove = () => {
     setConfirm(false)
     setDraft((m) => {
-      delete m.outputs[o.name]
+      m.outputs = m.outputs.filter((x) => x.name !== o.name)
       return m
     })
   }
@@ -227,7 +232,8 @@ function OutputCard({ o, subs }: { o: ModelOutput; subs: Sub[] | null }) {
   const sub = o.sub ? subs?.find((x) => x.id === o.sub) : undefined
   const setOnFail = (v: OnFail) =>
     setDraft((m) => {
-      m.outputs[o.name].on_fail = v
+      const out = m.outputs.find((x) => x.name === o.name)
+      if (out) out.on_fail = v
       return m
     })
   return (
@@ -235,25 +241,27 @@ function OutputCard({ o, subs }: { o: ModelOutput; subs: Sub[] | null }) {
       <div style={{ ...rowS("var(--an-space-5)"), justifyContent: "space-between" }}>
         <div style={{ ...col("2px"), minWidth: 0 }}>
           <h2 style={{ font: "var(--an-text-heading)", ...ellipsis }}>{o.name}</h2>
-          <span style={{ ...muted, ...ellipsis }}>{[KIND_TEXT[o.kind], o.title].filter(Boolean).join(" · ")}</span>
+          <span style={{ ...muted, ...ellipsis }}>{outputSub(o, (id) => subs?.find((x) => x.id === id)?.name)}</span>
         </div>
         <Badge tone={TONE_BADGE[s.tone]}>{s.text}</Badge>
       </div>
       <div style={col("var(--an-space-2)")}>
-        {o.kind === "vless" ? <KV k="подписка" v={sub ? `${sub.name} · узлов: ${sub.nodes}` : o.sub || "—"} /> : null}
+        {o.kind === "vless" ? <KV k="подписка" v={sub ? `${sub.name} · узлов: ${sub.nodes}` : "нет — выберите другую"} /> : null}
         {st?.up && st.device ? <KV k="устройство" v={<span style={{ font: "var(--an-text-code)" }}>{st.device}</span>} /> : null}
-        <div style={{ ...rowS("var(--an-space-6)"), justifyContent: "space-between" }}>
-          <span style={{ font: "var(--an-text-body-sm)", color: "var(--an-text-secondary)", flex: "0 0 auto" }}>если всё упало</span>
-          <Select value={o.on_fail ?? "drop"} onChange={(e) => setOnFail(e.currentTarget.value as OnFail)} style={{ minWidth: 0, maxWidth: 200 }}>
-            {(Object.keys(ON_FAIL_TEXT) as OnFail[])
-              .filter((k) => k !== "zapret")
-              .map((k) => (
+        {o.kind === "tgws" ? (
+          <KV k="если всё упало" v={ON_FAIL_TEXT.drop} />
+        ) : (
+          <div style={{ ...rowS("var(--an-space-6)"), justifyContent: "space-between" }}>
+            <span style={{ font: "var(--an-text-body-sm)", color: "var(--an-text-secondary)", flex: "0 0 auto" }}>если всё упало</span>
+            <Select value={o.on_fail ?? "drop"} onChange={(e) => setOnFail(e.currentTarget.value as OnFail)} style={{ minWidth: 0, maxWidth: 200 }}>
+              {(Object.keys(ON_FAIL_TEXT) as OnFail[]).map((k) => (
                 <option key={k} value={k}>
                   {ON_FAIL_TEXT[k]}
                 </option>
               ))}
-          </Select>
-        </div>
+            </Select>
+          </div>
+        )}
       </div>
       {o.kind === "vless" ? (
         <>
@@ -297,7 +305,6 @@ function NewOutput({ subs }: { subs: Sub[] | null }) {
   const { open } = useNav()
   const [sub, setSub] = useState("")
   const [name, setName] = useState("")
-  const [title, setTitle] = useState("")
   const [tried, setTried] = useState(false)
   if (!draft || !subs) return null
   const subId = sub || subs[0]?.id || ""
@@ -311,16 +318,19 @@ function NewOutput({ subs }: { subs: Sub[] | null }) {
         </Button>
       </Card>
     )
-  const nameErr = !NAME_RE.test(name) ? "Латиница, цифры и дефис, до 15 знаков" : draft.outputs[name] ? "Такой выход уже есть" : null
+  const nameErr = !NAME_RE.test(name)
+    ? "Латиница, цифры и дефис, до 15 знаков"
+    : name === "direct" || draft.outputs.some((o) => o.name === name)
+      ? "Такое имя уже занято"
+      : null
   const add = () => {
     setTried(true)
     if (nameErr) return
     setDraft((m) => {
-      m.outputs[name] = { name, kind: "vless", sub: subId, nodes: [], on_fail: "drop", ...(title.trim() ? { title: title.trim() } : {}) }
+      m.outputs.push({ name, kind: "vless", sub: subId, nodes: [], on_fail: "drop" })
       return m
     })
     setName("")
-    setTitle("")
     setTried(false)
   }
   return (
@@ -338,9 +348,6 @@ function NewOutput({ subs }: { subs: Sub[] | null }) {
       <Field label="Имя" error={tried ? nameErr : null}>
         <Input mono value={name} placeholder="vless-nl" onInput={(e) => setName(e.currentTarget.value.toLowerCase())} autoCapitalize="none" autoCorrect="off" spellCheck={false} invalid={tried && !!nameErr} />
       </Field>
-      <Field label="Подпись">
-        <Input value={title} placeholder="Нидерланды" onInput={(e) => setTitle(e.currentTarget.value)} />
-      </Field>
       <Button tone="secondary" full icon={<Icon name="plus" />} onClick={add}>
         Добавить выход
       </Button>
@@ -354,7 +361,7 @@ export function Outputs() {
   useEffect(() => {
     call("subs.list").then(setSubs).catch(() => setSubs([]))
   }, [])
-  const outs = draft ? Object.values(draft.outputs).filter((o) => o.kind !== "direct") : null
+  const outs = draft ? draft.outputs.filter((o) => o.kind !== "direct") : null
   return (
     <>
       <Header title="Выходы" />
