@@ -54,6 +54,67 @@ export const KIND_TEXT: Record<OutputKind, string> = {
   interface: "Туннель",
   direct: "напрямую",
   tgws: "Мост Telegram",
+  awg: "WireGuard",
+}
+
+/** «AmneziaWG» или «WireGuard» — по тому, включена ли в файле обфускация. */
+export function awgKind(o: ModelOutput): string {
+  return o.info?.obfs ? "AmneziaWG" : "WireGuard"
+}
+
+/** Вид выхода для подписи: у awg — по файлу. */
+export function kindText(o: ModelOutput): string {
+  return o.kind === "awg" ? awgKind(o) : KIND_TEXT[o.kind]
+}
+
+/** Сколько секунд назад — коротко: «2 мин назад»; null — «нет». */
+export function fmtAgoSec(s: number | null | undefined): string {
+  if (s == null) return "нет"
+  if (s < 45) return "только что"
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} мин назад`
+  if (s < 86400) return `${Math.round(s / 3600)} ч назад`
+  return `${Math.round(s / 86400)} дн назад`
+}
+
+/** Предел цепочки «через выход» — как у логики и движка: три перехода. */
+export const VIA_MAX_HOPS = 3
+
+/** Может ли выход идти через другой (vless, awg) и служить целью (interface, vless, awg). */
+export const viaCapable = (o: ModelOutput) => o.kind === "vless" || o.kind === "awg"
+const viaTarget = (o: ModelOutput) => o.kind === "interface" || o.kind === "vless" || o.kind === "awg"
+
+/** Выходы, через которые можно пустить `name`, не замкнув круг и не превысив глубину.
+ *  Окончательно решает логика (Model.kt, checkVia); здесь — чтобы в списке не было того, что
+ *  она отвергнет. */
+export function viaTargets(model: Model | null, name: string): ModelOutput[] {
+  if (!model) return []
+  const by = new Map(model.outputs.map((o) => [o.name, o]))
+  const next = (n: string) => by.get(n)?.via || undefined
+  // Глубина вниз от цели: сколько переходов уже у неё.
+  const down = (n: string): number => {
+    let k = 0
+    for (let c = next(n), seen = new Set([n]); c && !seen.has(c); c = next(c)) {
+      seen.add(c)
+      k++
+    }
+    return k
+  }
+  // Глубина вверх: самая длинная цепочка выходов, которые идут через `name`.
+  const up = (n: string, seen = new Set<string>()): number => {
+    let best = 0
+    for (const o of model.outputs)
+      if (o.via === n && !seen.has(o.name)) best = Math.max(best, 1 + up(o.name, new Set([...seen, n])))
+    return best
+  }
+  const reaches = (from: string, to: string) => {
+    for (let c: string | undefined = from, seen = new Set<string>(); c && !seen.has(c); c = next(c)) {
+      if (c === to) return true
+      seen.add(c)
+    }
+    return false
+  }
+  const above = up(name)
+  return model.outputs.filter((t) => t.name !== name && viaTarget(t) && !reaches(t.name, name) && above + 1 + down(t.name) <= VIA_MAX_HOPS)
 }
 
 export const ON_FAIL_TEXT: Record<OnFail, string> = {
@@ -72,7 +133,8 @@ export function outputLabel(name: string): string {
   return name === "direct" ? "Напрямую" : name
 }
 
-/** Вторая строка выхода: вид и то, откуда он берёт путь. */
+/** Вторая строка выхода: вид и то, откуда он берёт путь. «Через выход» здесь нет: в карточке
+ *  выхода он — своим выбором ниже, а на главной — в своей строке. */
 export function outputSub(o: ModelOutput, subName?: (id: string) => string | undefined): string {
   switch (o.kind) {
     case "vless": {
@@ -83,6 +145,9 @@ export function outputSub(o: ModelOutput, subName?: (id: string) => string | und
       return o.devices?.length ? `Туннель · ${o.devices.join(", ")}` : "Туннель"
     case "tgws":
       return o.domain ? `Мост Telegram · ${o.domain}` : "Мост Telegram"
+    case "awg": {
+      return o.info?.endpoint ? `${awgKind(o)} · ${o.info.endpoint}` : awgKind(o)
+    }
     default:
       return "без туннеля"
   }

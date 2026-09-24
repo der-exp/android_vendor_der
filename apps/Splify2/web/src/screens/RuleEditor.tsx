@@ -16,7 +16,7 @@ import { useNav, type RulePrefill } from "../nav"
 import { useAppLabels } from "../apps"
 import { AppIcon, Body, CardHead, Header, Segmented, col, ellipsis, muted, rowS } from "../ui"
 import { Icon } from "../icons"
-import { KIND_TEXT, WHO_TEXT, outputLabel, outputState, touchesDomains, usedOutputs } from "../format"
+import { WHO_TEXT, kindText, outputLabel, outputState, touchesDomains, usedOutputs } from "../format"
 import type { ModelChannel, ModelOutput, Who, WhoKind } from "../types"
 import { AppPicker, ListPicker } from "./Pickers"
 import { CustomEdit, suggestName } from "./CustomEdit"
@@ -245,7 +245,7 @@ export function RuleEditor({ index, prefill }: { index: number; prefill?: RulePr
                   onChange={() => set({ out: o.name })}
                   dot={<StatusDot tone={s.tone} />}
                   label={outputLabel(o.name)}
-                  meta={o.kind === "direct" ? "без туннеля" : KIND_TEXT[o.kind]}
+                  meta={o.kind === "direct" ? "без туннеля" : kindText(o)}
                   style={{ minHeight: 44 }}
                 />
               )

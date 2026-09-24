@@ -19,6 +19,17 @@ const settle = (page, ms = 900) => page.waitForTimeout(ms)
 const openRule = (name) => async (p) => { await p.getByText(name, { exact: true }).click(); await settle(p, 400) }
 const more = (item) => async (p) => { await p.getByText(item, { exact: true }).click(); await settle(p) }
 
+const addAwg = async (p) => { await p.getByRole("button", { name: /AmneziaWG/ }).click(); await settle(p, 300) }
+const AWG_TEXT = `[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+Address = 10.8.0.2/32
+MTU = 1280
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+Endpoint = 203.0.113.9:51820
+AllowedIPs = 0.0.0.0/0`
+
 const screens = [
   { name: "01-home", q: "?tab=home" },
   { name: "02-outputs", q: "?tab=outputs", after: async (p) => { await p.getByRole("button", { name: "Замерить" }).first().click(); await settle(p, 2200) } },
@@ -42,6 +53,9 @@ const screens = [
   { name: "20-more-custom-edit", q: "?tab=more", after: async (p) => { await more("Свои списки")(p); await p.getByText("work", { exact: true }).click(); await settle(p) } },
   { name: "21-dns-add-rule", q: "?tab=conns", after: async (p) => { await p.getByRole("button", { name: "Имена" }).click(); await settle(p); await p.getByRole("button", { name: "Добавить правило" }).first().click(); await settle(p) } },
   { name: "22-home-off", q: "?tab=home", after: async (p) => { await p.getByRole("switch", { name: "Маршрутизация" }).click(); await settle(p, 1200) } },
+  { name: "24-add-output-awg", q: "?tab=outputs", after: async (p) => { await addAwg(p); await p.getByLabel("Имя").last().fill("nl-home"); await p.getByLabel("Текст файла").fill(AWG_TEXT); await settle(p, 300); await p.getByText("Добавить выход", { exact: true }).last().scrollIntoViewIfNeeded() } },
+  { name: "25-add-output-awg-error", q: "?tab=outputs", after: async (p) => { await addAwg(p); await p.getByLabel("Имя").last().fill("nl-home"); await p.getByLabel("Текст файла").fill(AWG_TEXT.replace("MTU = 1280", "MTU = 1280\nFoo = 1")); await p.getByRole("button", { name: "Добавить выход" }).last().click(); await settle(p, 600) } },
+  { name: "26-add-output-awg-picked", q: "?tab=outputs", after: async (p) => { await addAwg(p); await p.getByRole("button", { name: "Выбрать файл" }).click(); await settle(p, 1400) } },
   { name: "23-new-rule", q: "?tab=rules", after: async (p) => { await p.getByRole("button", { name: "Новое правило" }).click(); await settle(p, 300); await p.getByRole("button", { name: "Добавить правило" }).click(); await settle(p, 300) } },
 ]
 

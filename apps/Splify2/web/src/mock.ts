@@ -9,6 +9,11 @@
  * оболочка, — через `__splifyReply` с задержкой, — чтобы экраны проходили через ожидание так
  * же, как на телефоне.
  *
+ * Выходы — все виды телефона, в том числе WireGuard через VLESS (wg-office с via на vless-nl)
+ * и AmneziaWG с обфускацией (fi-amnezia); outputs.importAwg разбирает вставленный текст
+ * упрощённо, но с теми же отказами на частые ошибки, что логика (Awg.kt), а outputs.pickAwg
+ * отвечает так, будто в окне выбрали файл.
+ *
  * Переключатели в адресе страницы — для состояний, которых на исправной заглушке не бывает:
  *   ?conns=0        — движок без команд conns и dns-log (unknown-method)
  *   ?apply=fail     — spec.apply: движок отверг новые правила, остались прежние
@@ -16,6 +21,8 @@
  */
 import type {
   AppInfo,
+  AwgImport,
+  AwgInfo,
   BridgeReply,
   Catalog,
   CatalogItem,
@@ -78,13 +85,29 @@ let model: Model = {
   outputs: [
     { name: "vless-nl", kind: "vless", sub: "s1", nodes: [2, 0], on_fail: "drop" },
     { name: "wg-home", kind: "interface", devices: ["wg0"], on_fail: "direct" },
+    {
+      name: "fi-amnezia",
+      kind: "awg",
+      conf: "3f0c9a1e2b7d4a5c",
+      info: { endpoint: "fi.vpn.example.net:51820", peers: 1, obfs: true, mtu: 1280, addresses: ["10.8.0.2/32"], ignored: ["DNS"] },
+      on_fail: "drop",
+    },
+    {
+      name: "wg-office",
+      kind: "awg",
+      conf: "9d2e41b07c5f3a86",
+      info: { endpoint: "198.51.100.7:51820", peers: 1, obfs: false, mtu: null, addresses: ["10.66.66.2/32"], ignored: [] },
+      via: "vless-nl",
+      on_fail: "drop",
+    },
   ],
   channels: [
     { name: "Банки напрямую", enabled: true, who: { kind: "apps", uids: [10123, 10145] }, what: { lists: [], custom: [], all: true }, out: "direct" },
     { name: "YouTube", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:youtube"], custom: [], all: false }, out: "vless-nl" },
     { name: "Telegram", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:telegram"], custom: [], all: false }, out: "vless-nl" },
     { name: "Discord", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:discord"], custom: [], all: false }, out: "vless-nl" },
-    { name: "Работа", enabled: true, who: { kind: "apps", uids: [10201] }, what: { lists: [], custom: ["work"], all: false }, out: "wg-home" },
+    { name: "Работа", enabled: true, who: { kind: "apps", uids: [10201] }, what: { lists: [], custom: ["work"], all: false }, out: "wg-office" },
+    { name: "X и Meta", enabled: true, who: { kind: "phone" }, what: { lists: ["itdoginfo:twitter", "itdoginfo:meta"], custom: [], all: false }, out: "fi-amnezia" },
     { name: "Раздача через VPN", enabled: false, who: { kind: "tether", from: [] }, what: { lists: [], custom: [], all: true }, out: "vless-nl" },
   ],
   lists: ["itdoginfo:youtube", "itdoginfo:telegram", "itdoginfo:discord"],
@@ -151,15 +174,23 @@ const apps: AppInfo[] = [
 
 function status(): Status {
   const outs: Status["outputs"] = { direct: { name: "direct", kind: "direct", up: true } }
+  // Имя устройства WireGuard движок выбирает неприметным: имя выхода или «if» с хэшем (awg.h).
+  const awgDev = (n: string) => (/^(tun|tap|utun|wg|awg|ppp|pptp|ipsec|vpn|l2tp|wireguard|amnezia)/i.test(n) || n.length > 15 ? "if3c1a9b7e" : n)
+  const awgLive: Record<string, Status["outputs"][string]["awg"]> = {
+    "fi-amnezia": { live: true, impl: "amneziawg", peers: 1, handshake_ago: 94, rx: 212 * MB, tx: 18 * MB, endpoint: "95.216.10.4:51820" },
+    "wg-office": { live: true, impl: "amneziawg", peers: 1, handshake_ago: 23, rx: 41 * MB, tx: 6 * MB, endpoint: "198.51.100.7:51820" },
+  }
   for (const o of model.outputs) {
     outs[o.name] = {
       name: o.name,
       kind: o.kind,
       up: true,
-      device: o.kind === "vless" ? "tun-vless-nl" : o.devices?.[0],
+      device: o.kind === "vless" ? "tun-vless-nl" : o.kind === "awg" ? awgDev(o.name) : o.devices?.[0],
       devices: o.devices,
       on_fail: o.on_fail,
       nodes: o.kind === "vless" ? o.nodes ?? [] : undefined,
+      ...(o.kind === "awg" ? { awg: awgLive[o.name] ?? { live: true, impl: "wireguard", peers: o.info?.peers ?? 1, handshake_ago: null, rx: 0, tx: 0, endpoint: null } } : {}),
+      ...(o.via ? { via: o.via } : {}),
     }
   }
   const bytes: Record<string, [number, number]> = {
@@ -168,10 +199,11 @@ function status(): Status {
     Discord: [9 * MB, 46 * MB],
     "Банки напрямую": [12 * MB, 81 * MB],
     Работа: [4 * MB, 19 * MB],
+    "X и Meta": [11 * MB, 164 * MB],
   }
   return {
     schema: 1,
-    features: ["pool", "status_cache"],
+    features: ["pool", "status_cache", "awg", "via"],
     outputs: outs,
     channels: model.channels
       .filter((c) => c.enabled !== false)
@@ -218,6 +250,89 @@ class Fail extends Error {
 function needEngine() {
   if (!engine.reachable) throw new Fail("engine-down", "Движок не отвечает — включите его или перезагрузите телефон")
 }
+
+/** Упрощённый разбор файла WireGuard: те же отказы на частые ошибки, что у логики (Awg.kt). */
+const AWG_IFACE = ["privatekey", "address", "mtu", "listenport", "dns", "table", "fwmark", "preup", "postup", "predown", "postdown", "saveconfig",
+  "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "headerprotectionkey",
+  "contentpaddingaddition", "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts", "randomtrailers", "disablecookies"]
+const AWG_PEER = ["publickey", "presharedkey", "endpoint", "allowedips", "persistentkeepalive", "advancedsecurity"]
+const KEY = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
+
+function awgParse(text: string): AwgInfo {
+  const bad = (m: string): never => {
+    throw new Fail("bad-args", `Файл WireGuard не подходит: ${m}`)
+  }
+  const t = text.trim()
+  if (t.startsWith("vpn://")) throw new Fail("bad-args", "Ключ vpn:// не подходит — выгрузите в AmneziaVPN настройки в формате AmneziaWG")
+  if (!/^\s*\[interface\]\s*$/im.test(text)) throw new Fail("bad-args", "Это не файл WireGuard: нет раздела [Interface]")
+  let sec = "", priv = false, peers = 0, pub = 0, endpoint: string | null = null, mtu: number | null = null, obfs = false
+  const addresses: string[] = [], ignored = new Set<string>()
+  text.split("\n").forEach((raw, i) => {
+    const l = raw.replace(/#.*/, "").trim()
+    if (!l) return
+    const no = i + 1
+    if (l.startsWith("[")) {
+      sec = l.toLowerCase()
+      if (sec === "[peer]") peers++
+      else if (sec !== "[interface]") bad(`строка ${no}: неизвестный раздел`)
+      return
+    }
+    const eq = l.indexOf("=")
+    if (eq < 0) bad(`строка ${no}: нет знака «=»`)
+    const k = l.slice(0, eq).trim(), v = l.slice(eq + 1).trim(), kl = k.toLowerCase()
+    if (!sec) bad(`строка ${no}: параметр ${k} вне раздела`)
+    if (sec === "[interface]") {
+      if (!AWG_IFACE.includes(kl)) bad(`строка ${no}: неизвестный параметр ${k} в [Interface]`)
+      if (kl === "privatekey") priv = KEY.test(v) || bad(`строка ${no}: PrivateKey — не ключ WireGuard (44 знака base64)`)
+      if (kl === "address") addresses.push(...v.split(",").map((x) => x.trim()).filter(Boolean))
+      if (kl === "mtu") mtu = Number(v)
+      if (kl === "dns") ignored.add("DNS")
+      if (/^(pre|post)(up|down)$/.test(kl)) ignored.add("PreUp/PostUp")
+      if (/^(jc|jmin|jmax|s[1-4])$/.test(kl) && Number(v) > 0) obfs = true
+      if (/^h[1-4]$/.test(kl) && v !== kl.slice(1)) obfs = true
+      if (/^i[1-5]$/.test(kl) && v) obfs = true
+    } else {
+      if (!AWG_PEER.includes(kl)) bad(`строка ${no}: неизвестный параметр ${k} в [Peer]`)
+      if (kl === "publickey") pub += KEY.test(v) ? 1 : bad(`строка ${no}: PublicKey — не ключ WireGuard (44 знака base64)`)
+      if (kl === "endpoint") {
+        if (!/^(\[[0-9a-f:]+\]|[^:\s]+):\d{1,5}$/i.test(v)) bad(`строка ${no}: Endpoint — хост:порт или [IPv6]:порт`)
+        if (peers === 1) endpoint = v
+      }
+    }
+  })
+  if (!priv) bad("в [Interface] нет PrivateKey")
+  if (!peers) bad("нет ни одного [Peer]")
+  if (pub < peers) bad(`у [Peer] №${pub + 1} нет PublicKey`)
+  return { endpoint, peers, obfs, mtu, addresses, ignored: [...ignored] }
+}
+
+function awgImport(text: string, name?: string): AwgImport {
+  const info = awgParse(text)
+  let h = 0
+  for (const c of text) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return { conf: (h.toString(16) + "0000000000000000").slice(0, 16), info, ...(name ? { name } : {}) }
+}
+
+/** «Выбранный» в окне файл для outputs.pickAwg. */
+const PICKED = `[Interface]
+PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
+Address = 10.8.1.4/32
+DNS = 1.1.1.1
+Jc = 5
+Jmin = 50
+Jmax = 1000
+S1 = 86
+S2 = 124
+H1 = 1139437039
+H2 = 1088834137
+H3 = 977318325
+H4 = 1379777867
+
+[Peer]
+PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
+Endpoint = hel.vpn.example.net:40521
+AllowedIPs = 0.0.0.0/0
+`
 
 const PREFIX = /^(\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?|[0-9a-f:]+:[0-9a-f:]*(\/\d{1,3})?)$/i
 const DOMAIN = /^(\*\.)?([a-z0-9-]+\.)+[a-z0-9-]{2,}$/i
@@ -300,7 +415,7 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
         conns: [
           { family: "ipv4", proto: "tcp", src: "10.0.0.5", sport: 40312, dst: "142.250.74.110", dport: 443, mark: "0x00400000", out: "vless-nl", state: "established", bytes: 310 * 1024, reply_bytes: 48 * MB },
           { family: "ipv4", proto: "udp", src: "10.0.0.5", sport: 51000, dst: "149.154.167.51", dport: 443, mark: "0x00400000", out: "vless-nl", bytes: 96 * 1024, reply_bytes: 2.1 * MB },
-          { family: "ipv6", proto: "tcp", src: "2a00:1450::5", sport: 44120, dst: "2a00:1450:4010:c05::64", dport: 443, mark: "0x00800000", out: "wg-home", state: "established" },
+          { family: "ipv6", proto: "tcp", src: "2a00:1450::5", sport: 44120, dst: "2a00:1450:4010:c05::64", dport: 443, mark: "0x00800000", out: "wg-office", state: "established" },
           { family: "ipv4", proto: "tcp", src: "10.0.0.5", sport: 40990, dst: "162.159.135.232", dport: 443, mark: "0x00c00000", out: null, state: "time_wait" },
         ],
         shown: 4,
@@ -319,7 +434,7 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
               { name: "rr3.googlevideo.com", channel: "YouTube", out: "vless-nl", count: 14, last: now() - 3, ago: 3 },
               { name: "yandex.ru", channel: null, out: null, count: 6, last: now() - 9, ago: 9 },
               { name: "discord.com", channel: "Discord", out: "vless-nl", count: 2, last: now() - 40, ago: 40 },
-              { name: "gitlab.work.example", channel: "Работа", out: "wg-home", count: 1, last: now() - 610, ago: 610 },
+              { name: "gitlab.work.example", channel: "Работа", out: "wg-office", count: 1, last: now() - 610, ago: 610 },
             ]
           : [],
       }
@@ -429,6 +544,14 @@ async function run(method: string, args: Record<string, any>, emit: Emit): Promi
     case "backup.export":
       await delay(300)
       return { file: "/data/user/0/com.der.splify2/files/exports/splify2-20260924-101500.json", name: "splify2-20260924-101500.json", bytes: 4812, saved: true }
+    case "outputs.importAwg":
+      await delay(200)
+      if (!String(args.text ?? "").trim()) throw new Fail("bad-args", "Вставьте текст файла WireGuard или выберите файл")
+      if (args.name && !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,30}$/.test(args.name)) throw new Fail("bad-args", `Имя выхода «${args.name}»: латиница, цифры, «_», «-» и «.», до 31 знака`)
+      return awgImport(String(args.text), args.name)
+    case "outputs.pickAwg":
+      await delay(700)
+      return { ...awgImport(PICKED, args.name), picked: true, file: "Helsinki.conf" }
     case "backup.import": {
       let parsed: { format?: string; model?: Model } | null = null
       try {

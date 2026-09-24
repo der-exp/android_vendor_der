@@ -7,7 +7,7 @@ import { useStore } from "../store"
 import { useNav } from "../nav"
 import { Body, CardHead, Divider, Header, TapRow, col, muted, rowS, ellipsis } from "../ui"
 import { Icon, type IconName } from "../icons"
-import { KIND_TEXT, fmtBytes, outputLabel, outputState, usedOutputs } from "../format"
+import { fmtBytes, kindText, outputLabel, outputState, usedOutputs } from "../format"
 import type { NetworkInfo, PrivateDns } from "../types"
 import logo from "@andromeda/ui/assets/logo-andromeda.svg"
 
@@ -136,7 +136,8 @@ function OutputsCard() {
       {outs.map((o, i) => {
         const st = status?.outputs[o.name]
         const s = states[i]
-        const sub = [KIND_TEXT[o.kind], st?.up && st.device ? st.device : null].filter(Boolean).join(" · ")
+        // «через» важнее имени устройства: строка одна, и влезают два слова после вида.
+        const sub = [kindText(o), o.via ? `через ${outputLabel(o.via)}` : st?.up && st.device ? st.device : null].filter(Boolean).join(" · ")
         return <TapRow key={o.name} dot={s.tone} title={outputLabel(o.name)} subtitle={sub} right={s.text} onClick={() => go("outputs")} />
       })}
     </Card>

@@ -35,8 +35,9 @@ export interface EngineState {
   version: string
 }
 
-/** Виды выходов на телефоне (Model.kt, OutKind). zapret и xsteer здесь нет — решение владельца. */
-export type OutputKind = "interface" | "direct" | "vless" | "tgws"
+/** Виды выходов на телефоне (Model.kt, OutKind). zapret и xsteer здесь нет — решение владельца.
+ *  awg — WireGuard/AmneziaWG, туннель в ядре, который заводит движок по файлу настроек. */
+export type OutputKind = "interface" | "direct" | "vless" | "tgws" | "awg"
 export type OnFail = "drop" | "direct"
 
 /** Выход в ответе `steer status`. */
@@ -52,6 +53,25 @@ export interface OutputStatus {
   nodes?: number[]
   /** Ход подъёма vless: только когда `up` ложно и движку есть что сказать. */
   probe?: { state: "probing" | "failed" | "no_such_node"; node?: number; total?: number }
+  /** Только у kind awg: туннель, как его видит ядро (контракт steer, §2 «awg»). */
+  awg?: AwgLive
+  /** Только у выхода с via: через какой выход идёт его туннель. Терпим и отсутствие —
+   *  движок без умения via поля не печатает. */
+  via?: string
+}
+
+/** Состояние туннеля WireGuard из ядра. `live: false` — устройства нет или ядро не ответило,
+ *  прочих полей тогда нет. */
+export interface AwgLive {
+  live: boolean
+  impl?: "amneziawg" | "wireguard" | string
+  peers?: number
+  /** Секунд с последнего рукопожатия; null — его не было. */
+  handshake_ago?: number | null
+  rx?: number
+  tx?: number
+  /** Адрес сервера после разрешения имени; null — нет. */
+  endpoint?: string | null
 }
 
 /** Набор правила в ответе `steer status`: счётчики наружу и внутрь. */
@@ -231,7 +251,36 @@ export interface ModelOutput {
   nodes?: number[]
   /** tgws: имя за Cloudflare для моста Telegram. */
   domain?: string
+  /** awg: ссылка на файл WireGuard у приложения (outputs.importAwg → conf). */
+  conf?: string
+  /** awg: что известно о файле без ключей; логика перезаписывает его из файла. */
+  info?: AwgInfo
+  /** vless, awg: через какой выход идёт сам туннель; нет — напрямую. */
+  via?: string | null
 }
+
+/** Несекретное описание файла WireGuard (logic/Awg.kt, AwgInfo). */
+export interface AwgInfo {
+  /** Сервер первого пира, как в файле: «хост:порт» или «[IPv6]:порт». */
+  endpoint: string | null
+  peers: number
+  /** Обфускация AmneziaWG. */
+  obfs: boolean
+  mtu: number | null
+  addresses: string[]
+  /** Строки файла, которые не применяются: DNS, Table, FwMark, PreUp/PostUp, SaveConfig. */
+  ignored: string[]
+}
+
+/** outputs.importAwg: ссылка на сохранённый файл и его описание. */
+export interface AwgImport {
+  conf: string
+  info: AwgInfo
+  name?: string
+}
+
+/** outputs.pickAwg: то же после системного окна «Открыть»; окно закрыли — picked: false. */
+export type AwgPick = (AwgImport & { picked: true; file?: string }) | { picked: false }
 
 /** Кому правило: весь телефон (from:"self"), приложения (from:"uid:N"), раздача
  *  (from пуст — все устройства раздачи; иначе адреса, подсети или MAC). */
@@ -444,6 +493,8 @@ export interface Methods {
   "subs.refresh": [{ id?: string } | void, Sub[]]
   "backup.export": [void, BackupExport]
   "backup.import": [{ json: string }, { saved: true }]
+  "outputs.importAwg": [{ text: string; name?: string }, AwgImport]
+  "outputs.pickAwg": [{ name?: string } | void, AwgPick]
 }
 
 export type Method = keyof Methods
