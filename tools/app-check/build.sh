@@ -159,6 +159,10 @@ want="android.permission.ACCESS_NETWORK_STATE android.permission.INTERNET androi
 # dex: мост пережил R8 под своим именем, stub скрытого API в dex не попал.
 "$BT/dexdump" "$OUT/dex/classes.dex" > "$OUT/dexdump.txt"
 grep -q "name *: 'call'" "$OUT/dexdump.txt" || { echo "в dex нет метода моста call" >&2; fail=1; }
+# ...и с аннотацией: без неё WebView метод странице не отдаст.
+"$BT/dexdump" -a "$OUT/dex/classes.dex" > "$OUT/dexdump-a.txt" 2>/dev/null
+grep -q "Landroid/webkit/JavascriptInterface;" "$OUT/dexdump-a.txt" ||
+	{ echo "в dex нет аннотации @JavascriptInterface" >&2; fail=1; }
 if grep -q "Class descriptor *: 'Landroid/os/SystemProperties;'" "$OUT/dexdump.txt"; then
 	echo "stub SystemProperties попал в dex" >&2; fail=1
 fi

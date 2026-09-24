@@ -7,13 +7,13 @@
 // в ссылке подписки — ключ доступа, по http он ушёл бы открытым текстом. Адрес http:// даст
 // ошибку network.
 //
-// Ошибки связи — BridgeError("network") с фразой для человека: у логики они уходят на экран
-// как есть. Ответ с кодом 4xx/5xx — не ошибка связи, а HttpResult с этим кодом: что значит
-// 404 у подписки или 304 у каталога, решает логика.
+// Отказ связи — IOException, как записано в договоре (logic/Contract.kt): логика ловит его и
+// пробует зеркало, а наверх отдаёт уже свою BridgeError("network") с фразой для человека.
+// Ответ с кодом 4xx/5xx — не ошибка связи, а HttpResult с этим кодом: что значит 404 у
+// подписки или 304 у каталога, решает логика.
 package com.der.splify2
 
 import android.content.Context
-import com.der.splify2.logic.BridgeError
 import com.der.splify2.logic.Http
 import com.der.splify2.logic.HttpResult
 import java.io.ByteArrayOutputStream
@@ -36,19 +36,9 @@ class HttpClient(ctx: Context) : Http {
     }
 
     override fun get(url: String, headers: Map<String, String>): HttpResult {
-        val u = try {
-            URL(url)
-        } catch (e: IOException) {
-            throw BridgeError(Shell.E_BAD_ARGS, "Неверный адрес: $url")
-        }
-        if (u.protocol != "https" && u.protocol != "http") {
-            throw BridgeError(Shell.E_BAD_ARGS, "Неверный адрес: $url")
-        }
-        val c = try {
-            u.openConnection() as HttpURLConnection
-        } catch (e: IOException) {
-            throw BridgeError(Shell.E_NETWORK, "Нет связи с ${u.host}")
-        }
+        val u = URL(url)
+        if (u.protocol != "https" && u.protocol != "http") throw IOException("не http(s): ${u.protocol}")
+        val c = u.openConnection() as HttpURLConnection
         try {
             c.connectTimeout = CONNECT_TIMEOUT_MS
             c.readTimeout = READ_TIMEOUT_MS
@@ -63,11 +53,7 @@ class HttpClient(ctx: Context) : Http {
             for ((k, v) in c.headerFields) {
                 if (k != null && v.isNotEmpty()) h[k.lowercase()] = v.first()
             }
-            return HttpResult(code, h, body)
-        } catch (e: BridgeError) {
-            throw e
-        } catch (e: IOException) {
-            throw BridgeError(Shell.E_NETWORK, "Нет связи с ${u.host}")
+            return HttpResult(code = code, body = body, headers = h)
         } finally {
             c.disconnect()
         }
@@ -81,7 +67,7 @@ class HttpClient(ctx: Context) : Http {
             val n = input.read(buf)
             if (n < 0) break
             out.write(buf, 0, n)
-            if (out.size() > MAX_BODY) throw BridgeError(Shell.E_NETWORK, "Файл больше ${MAX_BODY shr 20} МиБ")
+            if (out.size() > MAX_BODY) throw IOException("ответ больше ${MAX_BODY shr 20} МиБ")
         }
         return out.toByteArray()
     }

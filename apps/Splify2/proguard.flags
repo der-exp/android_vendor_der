@@ -2,11 +2,13 @@
 #
 # Методы с @JavascriptInterface зовёт страница по имени через WebView — для R8 они никем не
 # вызваны и без правила были бы выброшены или переименованы, а мост молча перестал бы
-# отвечать. Класс моста держим целиком с именами методов.
+# отвечать. Держим их с именами. Саму аннотацию тоже: WebView отдаёт странице только методы,
+# на которых она есть во время исполнения (проверка отражением), а R8 без keepattributes
+# выбрасывает аннотации из dex.
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
--keepattributes JavascriptInterface
+-keepattributes RuntimeVisibleAnnotations
 
 # Компоненты из манифеста (Activity, JobService, Application) держат правила, которые aapt2
 # выводит из манифеста сам; здесь их повторять не нужно.

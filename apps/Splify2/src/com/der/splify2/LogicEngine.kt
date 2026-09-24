@@ -23,17 +23,12 @@ class LogicEngine(private val client: EngineClient) : Engine {
     override fun status(): CtlReply = wrap { client.status() }
 
     /**
-     * Команды put-file у сервера ещё нет: пока он отвечает unknown-command, это отказ engine с
-     * фразой для человека, а не CtlReply с error — чтобы логика не могла по ошибке принять
-     * «файл не лёг» за успех и собрать спеку со ссылкой на несуществующий список.
+     * Команды put-file у сервера ещё нет: он отвечает unknown-command, и этот ответ уходит
+     * логике как есть (CtlReply с error). Логика превращает его в отказ engine со своей фразой
+     * (Dispatcher.push) — так spec.apply со списками честно не проходит, а не собирает спеку со
+     * ссылкой на несуществующий файл. Слова отказа — одни, у логики, а не два разных текста.
      */
-    override fun putFile(name: String, data: ByteArray): CtlReply {
-        val r = wrap { client.putFile(name, data) }
-        if (r.error == "unknown-command") {
-            throw BridgeError(Shell.E_ENGINE, "Эта версия движка не принимает списки — нужно обновление прошивки")
-        }
-        return r
-    }
+    override fun putFile(name: String, data: ByteArray): CtlReply = wrap { client.putFile(name, data) }
 
     private inline fun wrap(f: () -> CtlResult): CtlReply {
         val r = try {

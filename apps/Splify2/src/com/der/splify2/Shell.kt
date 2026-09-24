@@ -12,9 +12,11 @@ package com.der.splify2
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.SystemProperties
 import android.util.Log
 import com.der.splify2.logic.BridgeError
+import com.der.splify2.logic.DeviceInfo
 import com.der.splify2.logic.Dispatcher
 import org.json.JSONException
 import org.json.JSONObject
@@ -25,7 +27,6 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Отказ оболочки с кодом из BRIDGE.md («Коды ошибок») и фразой для человека. */
@@ -46,7 +47,13 @@ class Shell(val app: Context) {
     private val http = HttpClient(app)
 
     // Логика создаётся при первом вызове и в потоке пула: конструктор может читать файлы.
-    private val dispatcher: Dispatcher by lazy { Dispatcher(app.filesDir, LogicEngine(engine), http) }
+    // Её фоновая работа (обновление списков, подписок) шлёт события через onEvent — они идут
+    // на экран как есть. DeviceInfo — что логика говорит панели подписки об устройстве.
+    private val dispatcher: Dispatcher by lazy {
+        Dispatcher(app.filesDir, LogicEngine(engine), http, deviceInfo()).also {
+            it.onEvent = { name, payload -> emit(name, payload) }
+        }
+    }
 
     @Volatile var events: EventSink? = null
 
@@ -62,8 +69,6 @@ class Shell(val app: Context) {
             override fun newThread(r: Runnable) = Thread(r, "splify2-bridge-${n.incrementAndGet()}")
         },
     ).apply { allowCoreThreadTimeOut(true) }
-
-    private val listsUpdating = AtomicBoolean(false)
 
     fun emit(name: String, payloadJson: String) {
         events?.event(name, payloadJson)
@@ -119,13 +124,11 @@ class Shell(val app: Context) {
             "apps.list" -> apps.list(args.optBoolean("system")).toString()
 
             "spec.apply" -> specApply(argsJson)
-            "lists.update" -> listsUpdate(argsJson)
-            "subs.refresh" -> logic(method, argsJson).also { emit("subs.updated", it) }
 
             else -> if (method.substringBefore('.') in LOGIC_GROUPS) {
                 logic(method, argsJson)
             } else {
-                throw ShellError(E_UNKNOWN_METHOD, "Нет такого действия: $method")
+                throw ShellError(E_UNKNOWN_METHOD, "Эта версия приложения не знает такого действия")
             }
         }
     }
@@ -213,63 +216,30 @@ class Shell(val app: Context) {
     // --- логика с поведением оболочки -----------------------------------------------------
 
     /**
-     * spec.apply: собирает и применяет логика; оболочке остаётся Private DNS и событие.
+     * spec.apply: собирает, заливает и применяет логика; оболочке остаются Private DNS и
+     * событие engine.changed.
      *
-     * Логика кладёт в результат needsLocalDns — есть ли в применённой спеке доменные каналы на
-     * сам телефон (BRIDGE.md, «Оркестрация Private DNS»). Признак запоминается, только если
-     * спека действительно встала на место (spec.json сохранён): при отказе проверки в силе
-     * остаётся прежняя спека, и её признак прежний. Сохранена ли — поле saved, если логика его
-     * передала; иначе по applied: при включённом движке applied=false — отказ, при
-     * выключенном сервер сохраняет, не применяя (ctl.md, apply, шаг 3).
+     * Признак доменных каналов телефона — logic.ApplyResult.needsLocalDns (BRIDGE.md,
+     * «Оркестрация Private DNS»), итог последнего apply у Dispatcher.lastApply. Логика уже
+     * учла, встала ли спека на место: если движок новую отверг, в силе прежняя, и признак в
+     * lastApply прежний. Поэтому он берётся и после отказа — это просто сверка.
+     * BridgeError из логики (проверка не прошла, движок не ответил) уходит на экран как есть,
+     * Private DNS тогда не трогается: спека у движка та же, что была.
      */
     private fun specApply(argsJson: String): String {
         val r = logic("spec.apply", argsJson)
-        try {
-            val o = JSONObject(r)
-            if (o.has("needsLocalDns")) {
-                val enabled = engineEnabled()
-                val saved = when {
-                    o.has("saved") -> o.optBoolean("saved")
-                    o.optBoolean("rolled_back") -> false
-                    else -> o.optBoolean("applied") || !enabled
-                }
-                if (saved) privateDns.onSpecApplied(o.optBoolean("needsLocalDns"), enabled)
-            }
-        } catch (e: JSONException) {
-            Log.w(TAG, "spec.apply: результат не объект", e)
-        }
+        dispatcher.lastApply?.let { privateDns.onSpecApplied(it.needsLocalDns, engineEnabled()) }
         emit("engine.changed", engineState().toString())
         return r
     }
 
-    /**
-     * lists.update: экран получает {"started":true} сразу, само обновление идёт в пуле, по
-     * окончании — событие lists.updated (BRIDGE.md). Логика делает обновление обычным
-     * синхронным вызовом и возвращает {"ok","changed","message"?}; оболочка превращает его в
-     * фоновое. Второе обновление поверх идущего не запускается — оно скачало бы то же самое.
-     */
-    private fun listsUpdate(argsJson: String): String {
-        if (!listsUpdating.compareAndSet(false, true)) return "{\"started\":true}"
-        pool.execute {
-            val payload = try {
-                val o = JSONObject(logic("lists.update", argsJson))
-                if (!o.has("ok")) o.put("ok", true)
-                if (!o.has("changed")) o.put("changed", 0)
-                o
-            } catch (e: BridgeError) {
-                JSONObject().put("ok", false).put("changed", 0).put("message", e.message ?: "")
-            } catch (e: Exception) {
-                Log.e(TAG, "lists.update: сбой", e)
-                JSONObject().put("ok", false).put("changed", 0).put("message", "Не удалось обновить списки")
-            } finally {
-                listsUpdating.set(false)
-            }
-            emit("lists.updated", payload.toString())
-        }
-        return "{\"started\":true}"
-    }
-
     // --- мелочи ---------------------------------------------------------------------------
+
+    private fun deviceInfo() = DeviceInfo(
+        os = "Android",
+        osVersion = Build.VERSION.RELEASE ?: "",
+        model = Build.MODEL ?: "",
+    )
 
     private fun normalizeArgs(a: String?): String {
         val t = a?.trim()
