@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Локальный манифест der-exp для Xiaomi beryllium (Pocophone F1) на DerpFest 16.2.
+
+  Как пользоваться поверх готового дерева DerpFest 16.2:
+      repo init -u https://github.com/DerpFest-AOSP/android_manifest -b 16.2
+      mkdir -p .repo/local_manifests
+      curl -o .repo/local_manifests/beryllium.xml \
+        https://raw.githubusercontent.com/der-exp/android_vendor_der/der-16.2/manifest/beryllium.xml
+      repo sync -c -j8
+
+  Стоковый DerpFest дерева устройства beryllium не содержит вовсе, поэтому здесь только
+  ДОБАВЛЕНИЯ — remove-project не нужен. Все ветки закреплены на der-16.2 (наши правки) и
+  lineage-23.2 (то, что мы не меняли).
+-->
+<manifest>
+  <remote name="github" fetch="https://github.com/" />
+
+  <!-- Устройство и общая платформа sdm845. beryllium и sdm845-common взяты из der-exp:
+       в beryllium добавлена строка nf_tables (BoardConfig), sdm845-common без изменений,
+       но держим его в одной организации, чтобы ветку было где закрепить. -->
+  <project path="device/xiaomi/beryllium"
+           name="der-exp/android_device_xiaomi_beryllium"
+           remote="github" revision="der-16.2" />
+  <project path="device/xiaomi/sdm845-common"
+           name="der-exp/android_device_xiaomi_sdm845-common"
+           remote="github" revision="der-16.2" />
+
+  <!-- Ядро 4.9 с фрагментом steer.config (nf_tables). -->
+  <project path="kernel/xiaomi/sdm845"
+           name="der-exp/android_kernel_xiaomi_sdm845"
+           remote="github" revision="der-16.2" />
+
+  <!-- Зависимость sdm845-common (lineage.dependencies): hardware/xiaomi. Наших правок нет,
+       берём у LineageOS на ветке ROM. -->
+  <project path="hardware/xiaomi"
+           name="LineageOS/android_hardware_xiaomi"
+           remote="github" revision="lineage-23.2" />
+
+  <!-- Проприетарные блобы. TheMuppets публикует их по веткам LineageOS. ВНИМАНИЕ: ветка
+       блобов должна соответствовать версии ROM; на момент подготовки для beryllium последняя
+       ветка TheMuppets — lineage-22.2. Если сборка DerpFest 16.2 (база 23.2) потребует блобов
+       новее, их придётся взять с рабочего устройства (extract-files) — это отдельный шаг,
+       железозависимый, и здесь его не автоматизировать. -->
+  <project path="vendor/xiaomi/beryllium"
+           name="TheMuppets/proprietary_vendor_xiaomi_beryllium"
+           remote="github" revision="lineage-22.2" />
+  <project path="vendor/xiaomi/sdm845-common"
+           name="TheMuppets/proprietary_vendor_xiaomi_sdm845-common"
+           remote="github" revision="lineage-22.2" />
+
+  <!-- Userspace nftables под bionic: nft в system_ext, libnftnl и libmnl статически. -->
+  <project path="external/nftables"
+           name="der-exp/android_external_nftables"
+           remote="github" revision="der-16.2" />
+  <project path="external/libnftnl"
+           name="der-exp/android_external_libnftnl"
+           remote="github" revision="der-16.2" />
+  <project path="external/libmnl"
+           name="der-exp/android_external_libmnl"
+           remote="github" revision="der-16.2" />
+
+  <!-- Надстройка der-exp: der.mk, init-сервисы, SELinux-домен steerd. Подключается из
+       device.mk устройства строкой $(call inherit-product, vendor/der/config/der.mk). -->
+  <project path="vendor/der"
+           name="der-exp/android_vendor_der"
+           remote="github" revision="der-16.2" />
+
+  <!-- Движок steer. TODO: раскомментировать, когда Android-ветка steer (макрос STEER_ANDROID,
+       режим nft для ядра 4.9, Android.bp в корне) будет запушена в репозиторий движка. До тех
+       пор external/steer в дерево не входит, и der.mk не найдёт пакет steer при сборке.
+  <project path="external/steer"
+           name="xyzmean/steer"
+           remote="github" revision="ЖДЁТ-ПУША-ANDROID-ВЕТКИ" />
+  -->
+</manifest>

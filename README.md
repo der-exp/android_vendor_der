@@ -19,6 +19,7 @@ Magisk.
 | `sepolicy/private/steerd.te` | Права демона и запреты, скрывающие движок от чужих приложений |
 | `sepolicy/private/splify2_app.te` | Заготовка домена приложения splify2 — единственной двери к движку |
 | `sepolicy/private/{file,property,seapp}_contexts` | Метки бинарников, данных, свойства и привязка приложения |
+| `manifest/beryllium.xml` | Локальный манифест: сводит устройство, ядро, блобы, nftables и vendor/der для `repo sync` |
 | `tools/ndk-check/` | Проверка сборки модулей `Android.bp` компилятором NDK и запуск в aarch64-VM |
 
 Собранные части userspace (порт nftables под bionic и сам движок) лежат в соседних
