@@ -35,6 +35,10 @@ allow steerd self:netlink_netfilter_socket { create bind write read setopt getop
 
 # netlink route — ip rule/route и чтение состояния интерфейсов сторожем.
 allow steerd self:netlink_route_socket { create bind write read setopt getopt nlmsg_read nlmsg_write nlmsg };
+# Выход kind=awg: устройство AmneziaWG/WireGuard движок настраивает сам, через generic netlink
+# (семейства "amneziawg" и "wireguard", команды GET_DEVICE/SET_DEVICE) — без внешнего `awg` и
+# без userspace-клиента: туннель целиком в ядре, как того требует батарея.
+allow steerd self:netlink_generic_socket { create bind read write setopt getopt };
 
 # ЗАДЕЛ НА policycap netlink_xperm (ядро 6.13 и новее; в lineage-23.2 не включён). С этой
 # возможностью ядро проверяет сообщения netlink не парой nlmsg_read/nlmsg_write, а правом nlmsg
