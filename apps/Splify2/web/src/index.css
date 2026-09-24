@@ -1,0 +1,48 @@
+/* Токены Andromeda по одному файлу — всё, что подключает styles.css пакета, кроме
+   tokens/fonts.css: тот тянет шрифты с Google Fonts, а WebView приложения в чужую сеть
+   не ходит (vite.config.ts, псевдоним @andromeda-tokens). */
+@import "@andromeda-tokens/colors.css";
+@import "@andromeda-tokens/accents.css";
+@import "@andromeda-tokens/typography.css";
+@import "@andromeda-tokens/spacing.css";
+@import "@andromeda-tokens/radii.css";
+@import "@andromeda-tokens/elevation.css";
+@import "@andromeda-tokens/motion.css";
+@import "@andromeda-tokens/base.css";
+
+/* Шрифты прошивки: вебфонт не отгружается (правило Andromeda), на телефоне системный
+   sans — Roboto или Google Sans. */
+:root {
+  --an-font-sans: "Google Sans", Roboto, "Helvetica Neue", Arial, system-ui, sans-serif;
+  --an-font-mono: "Roboto Mono", "JetBrains Mono", ui-monospace, "Droid Sans Mono", monospace;
+  --an-font-host: var(--an-font-sans);
+}
+
+/* Мобильная раскладка Andromeda: контролы не ниже 44 px — размеры переопределяются
+   токенами, а не правкой компонентов. */
+.an-root {
+  --an-size-control: 44px;
+  --an-size-control-sm: 44px;
+  --an-size-icon-button: 44px;
+  --an-pad-card: var(--an-space-8) var(--an-space-8);
+  --an-pad-row: var(--an-space-6) var(--an-space-7);
+  /* высота нижней панели без системного отступа */
+  --sp-nav-h: 60px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--an-surface-page);
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+.an-root button, .an-root input, .an-root select, .an-root textarea { font: inherit; color: inherit; }
+.an-root img { display: block; }
+.an-root .sp-tab { font-variant-numeric: tabular-nums; }
+.an-root .sp-press:active { background: var(--an-surface-field); }
