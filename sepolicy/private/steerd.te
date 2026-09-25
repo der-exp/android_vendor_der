@@ -179,3 +179,15 @@ neverallow { appdomain } steerd_bin_dir:dir { search read open };
 # Свойство-выключатель приложение писать не может — иначе любое приложение включало бы или
 # гасило движок.
 neverallow { appdomain -splify2_app } steerd_prop:property_service set;
+
+# stdio_to_kmsg: на userdebug/eng init отдаёт stdout и stderr служб в /dev/kmsg_debug, а не в
+# /dev/kmsg. Без этого права все строки steer[warn]/steer[info] служб движка молча терялись —
+# на телефоне так нельзя было увидеть даже отказ masquerade (найдено на POCO F1, 4.19).
+userdebug_or_eng(`
+  allow steerd kmsg_debug_device:chr_file { open getattr write append };
+')
+
+# ip читает /data/misc/net/rt_tables (имена таблиц маршрутизации netd); без права — отказ
+# в журнале на каждом вызове ip. Только чтение.
+allow steerd net_data_file:dir search;
+allow steerd net_data_file:file { open getattr read };
