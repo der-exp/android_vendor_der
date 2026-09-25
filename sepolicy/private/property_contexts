@@ -1,3 +1,6 @@
 # Свойство-выключатель движка. Тип steerd_prop, чтобы писать его могли только init и splify2
 # (см. neverallow в steerd.te), а читать — демон.
 persist.der.steer.enabled    u:object_r:steerd_prop:s0
+# Фаза включения (см. steerd.rc): ставит init, по ней сторож стартует после apply. Тип тот же —
+# писать могут только init и splify2, а поставленная приложением фаза лишь запустит сторожа.
+der.steer.phase              u:object_r:steerd_prop:s0

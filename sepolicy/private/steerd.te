@@ -185,6 +185,9 @@ neverallow { appdomain -splify2_app } steerd_prop:property_service set;
 # на телефоне так нельзя было увидеть даже отказ masquerade (найдено на POCO F1, 4.19).
 userdebug_or_eng(`
   allow steerd kmsg_debug_device:chr_file { open getattr write append };
+  # sh из steerd-apply спрашивает у своего stdout, терминал ли он (TCGETS), — ответ «нет»
+  # его устраивает, а отказ сыпался в журнал на каждом включении.
+  dontaudit steerd kmsg_debug_device:chr_file ioctl;
 ')
 
 # ip читает /data/misc/net/rt_tables (имена таблиц маршрутизации netd); без права — отказ

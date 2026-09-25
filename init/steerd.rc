@@ -132,17 +132,28 @@ service steerd-down /system_ext/bin/der/steer down --state-dir /data/misc/steer/
     oneshot
     disabled
 
-# Включение по свойству. splify2 ставит persist.der.steer.enabled=1 — и init поднимает всё
-# сразу: start не ждёт окончания oneshot, так что помощники, apply, резолвер и сторож стартуют
-# вместе. Порядок им и не нужен: TUN помощника, появившийся после apply, сторож видит событием
-# ядра и привязывает, а до того трафик выхода держит on_fail (blackhole или напрямую).
+# Включение по свойству. splify2 ставит persist.der.steer.enabled=1 — и init поднимает
+# помощников, apply и резолвер сразу: start не ждёт окончания oneshot. Сторожа — нет: его
+# первый проход, пришедшийся раньше apply, видит ядро без ip rule и без устройства туннеля и
+# пишет в журнал «маршрутизация разъехалась» и «туннель молчит» — на телефоне это было на
+# каждом включении. Чинить он умеет, но тревоги ложные, а журнал человек читает в приложении.
+#
+# Поэтому сторож стартует по окончании apply. Одного init.svc.steerd-apply=stopped мало:
+# после прошлого включения там уже «stopped», и на повторном 0 → 1 условие было бы истинно
+# сразу. Свойство der.steer.phase ставится ПОСЛЕ start steerd-apply — к этому моменту init уже
+# записал apply в running, — так что «applying && stopped» означает именно этот запуск.
+# Повторные apply (загрузка, netd) фазу не трогают, и сторож от них не перезапускается.
 # stop steerd-down — на случай быстрого переключения 0 → 1, чтобы снятие не легло поверх
 # только что поставленного.
 on property:persist.der.steer.enabled=1
     stop steerd-down
     start steerd-outputs
     start steerd-apply
+    setprop der.steer.phase applying
     start steerd-dnsd
+
+on property:der.steer.phase=applying && property:init.svc.steerd-apply=stopped
+    setprop der.steer.phase applied
     start steerd-failover
 
 # netd при старте стирает ВСЕ ip rule, кроме приоритета 0 (RouteController::Init → flushRules),
@@ -162,6 +173,7 @@ on property:init.svc.netd=running && property:persist.der.steer.enabled=1
 # тогда нечего, и steer down просто ничего не находит.
 # steerd-ctl не гасится: он нужен и при выключенном движке (см. его описание выше).
 on property:persist.der.steer.enabled=0
+    setprop der.steer.phase off
     stop steerd-failover
     stop steerd-dnsd
     stop steerd-outputs
