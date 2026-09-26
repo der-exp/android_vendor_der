@@ -88,6 +88,13 @@ r_dir_file(steerd, sysfs_net)
 allow steerd self:rawip_socket { create getopt setopt read write };
 allow steerd self:icmp_socket { create getopt setopt read write connect };
 allow steerd system_file:file lock;
+# iptables перед работой смотрит /proc/net/ip_tables_names (какие таблицы ядро уже знает), а не
+# найдя нужную — читает /proc/sys/kernel/modprobe, чтобы подгрузить модуль. На GKI таблицы
+# встроены, и оба шага ничего не меняют: masquerade ставится и с отказом, но каждый вызов
+# оставлял в журнале по два отказа (снято в Cuttlefish на ядре 6.12). Список таблиц — законное
+# чтение, модули движку грузить незачем: второе не разрешаем, а только не пишем в журнал.
+allow steerd proc_net:file r_file_perms;
+dontaudit steerd usermodehelper:file read;
 
 # nft вызывается движком как внешняя команда. Бинарник nft помечен steerd_exec (см.
 # file_contexts) и исполняется В ТОМ ЖЕ домене steerd (execute_no_trans): отдельный домен для
