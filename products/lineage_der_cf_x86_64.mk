@@ -16,3 +16,8 @@ TARGET_NO_KERNEL_OVERRIDE := true
 
 PRODUCT_NAME := lineage_der_cf_x86_64
 PRODUCT_MODEL := Cuttlefish x86_64 phone (der-exp)
+
+# DerpFest кладёт в system библиотеку, которой нет в списке generic_system.mk; на телефоне
+# такого требования нет, а Cuttlefish его проверяет. Разрешено поимённо.
+PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+    system/lib/libtensorflowlite_jni.so
