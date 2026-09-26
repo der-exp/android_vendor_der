@@ -9,7 +9,8 @@
 # Сверх того, чего на роутере нет вовсе, — управляющий сокет steerd-ctl: на роутере splify2
 # зовёт движок как программу, а на телефоне приложению это запрещено политикой.
 #
-# Пути отличаются от роутера и заданы сборкой через -DSTEER_ANDROID:
+# Пути отличаются от роутера и заданы платформой android движка (src/platform/android.c,
+# умолчание сборки -DSTEER_DEFAULT_PLATFORM=android в Android.bp):
 #   спека   /data/misc/steer/spec.json   (на роутере /etc/steer/spec.json)
 #   состояние /data/misc/steer/state     (на роутере /var/lib/steer, tmpfs)
 #   времянки /data/misc/steer/tmp        (на роутере /tmp)
