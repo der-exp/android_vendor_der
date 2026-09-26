@@ -23,7 +23,7 @@ there so that code which only builds because a warning is not an error on the
 host fails here too; they are not guaranteed to be a byte-for-byte copy.
 
 Usage:
-  bpbuild.py --out DIR [--api 34] [--static] [--no-werror] [--std gnu23]
+  bpbuild.py --out DIR [--api 34] [--arch aarch64|x86_64] [--static] [--no-werror] [--std gnu23]
              [--external DIR ...] DIR... -- TARGET...
 Each DIR is a directory with an Android.bp; TARGET is a module name to build.
 """
@@ -69,9 +69,15 @@ SOONG_CFLAGS = [
     "-Wno-unused-but-set-variable", "-Wno-unused-but-set-parameter",
     "-Wno-array-parameter", "-Wno-gnu-offsetof-extensions",
     "-Werror=implicit-function-declaration",
-    # arm64
-    "-march=armv8-a", "-O2", "-fPIE",
+    "-O2", "-fPIE",
 ]
+
+# Флаги архитектуры (arm64_device.go / x86_64_device.go). x86_64 — для Cuttlefish: движок на
+# виртуальном телефоне x86_64 собирается тем же Android.bp.
+ARCH_CFLAGS = {
+    "aarch64": ["-march=armv8-a"],
+    "x86_64": ["-march=x86-64"],
+}
 
 # Added for modules under external/ (Soong: config.ExternalCflags).
 SOONG_EXTERNAL_CFLAGS = [
@@ -199,6 +205,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--ndk", default=os.environ.get("ANDROID_NDK", "/root/android-ndk"))
     ap.add_argument("--api", default="34")
+    ap.add_argument("--arch", default="aarch64", choices=sorted(ARCH_CFLAGS),
+                    help="target architecture (x86_64 — for Cuttlefish)")
     ap.add_argument("--std", default="gnu23",
                     help="Soong's default C standard (build/soong/cc/config/global.go)")
     ap.add_argument("--static", action="store_true",
@@ -222,7 +230,7 @@ def main():
     dirs, targets = a.rest[:k], a.rest[k + 1:]
 
     tc = os.path.join(a.ndk, "toolchains/llvm/prebuilt/linux-x86_64/bin")
-    cc = os.path.join(tc, f"aarch64-linux-android{a.api}-clang")
+    cc = os.path.join(tc, f"{a.arch}-linux-android{a.api}-clang")
     ar = os.path.join(tc, "llvm-ar")
 
     mods = {}
@@ -285,7 +293,7 @@ def main():
     def compile_module(name):
         typ, props, d = resolved(name)
         deps = props.get("static_libs", []) + props.get("whole_static_libs", [])
-        flags = list(SOONG_CFLAGS)
+        flags = list(SOONG_CFLAGS) + ARCH_CFLAGS[a.arch]
         if any(os.path.abspath(e) == d for e in a.external):
             flags += SOONG_EXTERNAL_CFLAGS
         flags.append("-std=" + props.get("c_std", a.std))
