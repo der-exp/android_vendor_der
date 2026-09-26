@@ -156,6 +156,12 @@ allow steerd steerd_data_file:sock_file { create unlink getattr write };
 # подключиться к сокету демона.
 allow steerd self:unix_stream_socket connectto;
 
+# Ответ команды, которую демон исполняет у себя, несёт и её stderr: на время команды дескриптор 2
+# перенаправлен в memfd «steer-ctl», а по окончании демон читает его обратно (cap_fd в
+# src/daemon/ctl.c). memfd получает тип файловой системы, tmpfs; писать в него демону уже можно,
+# без чтения ответы приходили бы без причины отказа (снято в Cuttlefish, steer 1.8).
+allow steerd tmpfs:file { read getattr };
+
 # Каталог /system_ext/bin/der — свой тип (см. file_contexts): его могут обходить только init
 # (запуск сервиса) и сам демон.
 allow { init steerd } steerd_bin_dir:dir r_dir_perms;
