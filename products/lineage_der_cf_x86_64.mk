@@ -7,12 +7,22 @@
 # KERNEL_MODULES_PATH доски Cuttlefish, а не собираются Lineage из исходников.
 $(call inherit-product, device/google/cuttlefish/vsoc_x86_64/phone/aosp_cf.mk)
 
+# Разблокировка по лицу DerpFest (ParanoidSense) — только с библиотеками arm64; на x86_64 её
+# зависимостей нет. Переключатель читается в vendor/lineage/config/derpfest.mk через ?=, поэтому
+# задаётся до подключения конфигурации Lineage.
+TARGET_FACE_UNLOCK_SUPPORTED := false
+
 include vendor/lineage/build/target/product/lineage_generic_target.mk
 
 $(call inherit-product, vendor/der/config/der.mk)
 
 TARGET_DISABLE_EPPE := true
 TARGET_NO_KERNEL_OVERRIDE := true
+
+# Cuttlefish запрещает Android.mk целиком, а оверлеи DerpFest (значки, темы — зависимости
+# frameworks-base-overlays) описаны именно там.
+PRODUCT_IGNORE_ALL_ANDROIDMK := false
+PRODUCT_SOONG_ONLY := false
 
 PRODUCT_NAME := lineage_der_cf_x86_64
 PRODUCT_MODEL := Cuttlefish x86_64 phone (der-exp)
