@@ -13,17 +13,18 @@
 # случай: не AOSP, но и не привязка к железу Qualcomm.
 
 PRODUCT_PACKAGES += \
+    steerd \
     steer \
     nft \
     steerd.rc \
     Splify2
 
-# steer — расширенная сборка движка (клиент VLESS/Reality, xsteer, tgws; решение владельца —
-# сразу в первой версии). Ей нужен mbedtls 3.6 из external/der-mbedtls: копия AOSP в
+# steerd — расширенная сборка движка (клиент VLESS/Reality, xsteer, tgws; решение владельца —
+# сразу в первой версии), с ссылкой steer-tools (symlinks в Android.bp движка); steer — клиент
+# сокета демона. Ей нужен mbedtls 3.6 из external/der-mbedtls: копия AOSP в
 # external/mbedtls — 3.5.2 без модулей Soong. Базовая сборка без mbedtls — модуль steer_base.
-# steer ставится в /system_ext/bin/der/ (relative_install_path в Android.bp), nft — рядом в
-# /system_ext/bin. dnsd, сторож и снимок состояния — это тот же бинарник steer с разными
-# подкомандами, отдельных пакетов у них нет (как и на роутере).
+# Оба ставятся в /system_ext/bin/der/ (relative_install_path в Android.bp), nft — рядом в
+# /system_ext/bin. Резолвер, сторож и помощники — это тот же steerd, отдельных пакетов у них нет.
 
 # Splify2 — приложение управления (apps/Splify2): system_ext/priv-app на платформенной подписи,
 # единственная дверь к движку. Белый список его привилегированных разрешений

@@ -150,6 +150,11 @@ allow steerd steerd_data_file:sock_file { create unlink getattr write };
 # резолвер и супервизор по /proc/<pid>/exe и посылает им SIGHUP/SIGTERM — тоже только внутри
 # своего домена (domain.te: r_dir_file(domain, self), self:process signal), чужие процессы
 # домену не видны. Своих строк для этого здесь поэтому нет.
+#
+# Одно исключение — connectto: его domain.te не даёт. С steer 1.8 init сообщает демону о
+# выключателе клиентом `steer reload` (служба steerd-reload, тот же домен), и клиенту нужно
+# подключиться к сокету демона.
+allow steerd self:unix_stream_socket connectto;
 
 # Каталог /system_ext/bin/der — свой тип (см. file_contexts): его могут обходить только init
 # (запуск сервиса) и сам демон.
@@ -192,7 +197,7 @@ neverallow { appdomain -splify2_app } steerd_prop:property_service set;
 # на телефоне так нельзя было увидеть даже отказ masquerade (найдено на POCO F1, 4.19).
 userdebug_or_eng(`
   allow steerd kmsg_debug_device:chr_file { open getattr write append };
-  # sh из steerd-apply спрашивает у своего stdout, терминал ли он (TCGETS), — ответ «нет»
+  # sh, которого зовёт движок, спрашивает у своего stdout, терминал ли он (TCGETS), — ответ «нет»
   # его устраивает, а отказ сыпался в журнал на каждом включении.
   dontaudit steerd kmsg_debug_device:chr_file ioctl;
 ')

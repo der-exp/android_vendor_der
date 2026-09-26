@@ -1,11 +1,14 @@
 # Метки файлов движка steer.
 #
-# Бинарники в /system_ext/bin. steer лежит в подкаталоге der/ (relative_install_path в
+# Бинарники в /system_ext/bin. steerd (движок), steer (клиент сокета, при надобности делает
+# execv steerd) и ссылка steer-tools лежат в подкаталоге der/ (relative_install_path в
 # Android.bp), nft — рядом. Сам каталог der/ — steerd_bin_dir (см. steerd.te): его не
 # обходит никто, кроме init и демона. Оба бинарника получают тип steerd_exec: nft исполняется в домене steerd
 # (см. steerd.te), поэтому его точка входа — тот же тип, что у самого движка.
 /system_ext/bin/der           u:object_r:steerd_bin_dir:s0
 /system_ext/bin/der/steer     u:object_r:steerd_exec:s0
+/system_ext/bin/der/steerd    u:object_r:steerd_exec:s0
+/system_ext/bin/der/steer-tools u:object_r:steerd_exec:s0
 /system_ext/bin/nft           u:object_r:steerd_exec:s0
 
 # Данные движка. Каталог и всё под ним — steerd_data_file. Управляющий сокет создаётся

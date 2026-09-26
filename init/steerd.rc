@@ -1,13 +1,11 @@
 # steerd.rc — запуск движка steer под Android init.
 #
-# Это порт start_service из OpenWrt-скрипта files/etc/init.d/steer на язык init.rc. На
-# роутере procd читает спеку и поднимает по экземпляру на каждый выход (vless, xsteer, obfs,
-# zapret, tgws); в init.rc так нельзя — сервисы объявляются статически, а состав выходов
-# известен только из спеки во время работы. Поэтому здесь заведены только процессы, которые
-# есть при ЛЮБОЙ настройке: применение правил, резолвер доменов, сторож устройств и снятие
-# правил при выключении, а помощников отдельных выходов (свой туннель) — сервис steerd-outputs.
-# Сверх того, чего на роутере нет вовсе, — управляющий сокет steerd-ctl: на роутере splify2
-# зовёт движок как программу, а на телефоне приложению это запрещено политикой.
+# С steer 1.8 движок — один демон, steerd: управляющий сокет, применение правил, сторож
+# выходов, страж правил, супервизор помощников и резолвер доменов (его ребёнок). Раньше это были
+# шесть служб init, и порядок между ними приходилось выстраивать свойствами; теперь порядок —
+# забота демона (первый проход сторожа — после стартового применения), а init только держит
+# демон живым и сообщает ему о выключателе. steer — маленький клиент сокета, steer-tools —
+# ссылка на steerd (роль по argv[0]).
 #
 # Пути отличаются от роутера и заданы платформой android движка (src/platform/android.c,
 # умолчание сборки -DSTEER_DEFAULT_PLATFORM=android в Android.bp):
@@ -29,29 +27,30 @@ on post-fs-data
     mkdir /data/misc/steer/tmp 0700 root root
     restorecon_recursive /data/misc/steer
 
-# Общее у всех сервисов движка:
-#   group vpn        — /dev/tun ueventd создаёт как 0660 system:vpn (помощники выходов, apply);
-#   stdio_to_kmsg    — init отдаёт stdout и stderr сервисов в /dev/null, а журнал движка — это
+# Общее у служб движка:
+#   group vpn        — /dev/tun ueventd создаёт как 0660 system:vpn (помощники выходов);
+#   stdio_to_kmsg    — init отдаёт stdout и stderr служб в /dev/null, а журнал движка — это
 #                      строки steer[warn]/steer[info] в stderr: с этой опцией они в dmesg;
-#   gentle_kill      — stop шлёт SIGTERM и лишь через 200 мс SIGKILL: сторож и супервизор
-#                      успевают убрать за собой (правило пробы, помощников).
+#   gentle_kill      — stop шлёт SIGTERM и лишь через 200 мс SIGKILL: демон успевает погасить
+#                      помощников и резолвер.
 
-# Управляющий сокет — единственная дверь приложения splify2 к движку (`steer ctl-serve`, протокол
-# в docs/ctl.md дерева steer): status, diag, explain, apply и check со спекой в теле, reload,
-# пробы узлов VLESS. Приложению политика не даёт ни исполнить движок, ни прочитать его файлы,
-# поэтому всё это делает сервер от его имени.
+# Демон. ПОДНИМАЕТСЯ ПРИ КАЖДОЙ ЗАГРУЗКЕ, независимо от persist.der.steer.enabled: через его сокет
+# приложение показывает состояние и сохраняет спеку и тогда, когда движок выключен (apply при
+# выключенном движке только сохраняет). Выключатель приложение ставит само, свойством; домену
+# движка писать его нельзя нарочно (steerd.te), читает его демон сам.
 #
-# ПОДНИМАЕТСЯ ПРИ КАЖДОЙ ЗАГРУЗКЕ, независимо от persist.der.steer.enabled: через него приложение
-# показывает состояние и сохраняет спеку и тогда, когда движок выключен (apply при выключенном
-# движке только сохраняет — правила поставит steerd-apply, когда его включат). Выключатель
-# приложение ставит само, свойством: домену движка писать его нельзя нарочно (steerd.te).
-# Стоит это ничего: сервер спит в ppoll без срока — ни таймеров, ни периодических действий;
-# будит его только соединение.
+# Батарея: при выключенном движке у демона нет ни одного таймера — ни прохода сторожа, ни снимка
+# состояния, ни стража правил; он спит в epoll_wait без срока до запроса по сокету. При
+# включённом сроки — на CLOCK_MONOTONIC (во сне устройства стоят и не будят его), wakelock не
+# берётся. --apply — при старте поставить сохранённую спеку, если движок включён.
 #
-# Сокет /data/misc/steer/steer.sock создаёт сам сервер, а не опция `socket` у init: та кладёт
+# Сокет /data/misc/steer/steer.sock создаёт сам демон, а не опция `socket` у init: та кладёт
 # сокет в /dev/socket, который листает любой домен (system/sepolicy, domain.te), то есть имя
 # движка увидело бы любое приложение. Метку steerd_socket сокету ставит type_transition.
-service steerd-ctl /system_ext/bin/der/steer ctl-serve --spec /data/misc/steer/spec.json
+#
+# Резолвер на телефоне переспрашивает тот сервер, к которому шёл запрос (умолчание платформы
+# android в движке): на 127.0.0.1:53 здесь никто не слушает.
+service steerd /system_ext/bin/der/steerd daemon --watch --supervise --apply
     class late_start
     user root
     group root net_admin net_raw inet vpn
@@ -60,9 +59,23 @@ service steerd-ctl /system_ext/bin/der/steer ctl-serve --spec /data/misc/steer/s
     stdio_to_kmsg
     gentle_kill
 
-# Применение правил — разовое действие: собрать набор правил, отдать его ядру через nft,
-# поставить ip rule и masquerade — и завершиться. Правила остаются в ядре сами.
-service steerd-apply /system_ext/bin/der/steer apply --spec /data/misc/steer/spec.json
+# Сообщить демону о выключателе: `steer reload` по сокету. Включили — демон перечитывает спеку,
+# ставит правила и заводит сторожа; выключили — гасит свои таймеры (правила снимает steerd-down
+# после него, см. ниже).
+service steerd-reload /system_ext/bin/der/steer reload
+    class late_start
+    user root
+    group root net_admin net_raw inet vpn
+    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
+    seclabel u:r:steerd:s0
+    stdio_to_kmsg
+    oneshot
+    disabled
+
+# Снятие правил при выключении: таблицы движка во всех раскладках, ip rule, маршруты выходов и
+# masquerade в iptables. Разово, исполняемым файлом движка напрямую, не через сокет: снимать
+# надо и тогда, когда демон упал.
+service steerd-down /system_ext/bin/der/steerd down --state-dir /data/misc/steer/state
     class late_start
     user root
     group root net_admin net_raw inet vpn
@@ -73,112 +86,31 @@ service steerd-apply /system_ext/bin/der/steer apply --spec /data/misc/steer/spe
     oneshot
     disabled
 
-# Резолвер доменных каналов. Поднимается при любой спеке, как и на роутере (steer needs-dnsd
-# отвечает «поднимать» всегда): перенаправление DNS стоит в правилах всегда, и резолвер, к
-# которому оно ведёт, обязан существовать вместе с ним.
-#
-# --upstream-origdst: наверху у резолвера на телефоне никого нет (на 127.0.0.1:53 никто не
-# слушает), поэтому каждый запрос уходит к тому серверу, к которому шёл до заворота, — адрес
-# берётся из conntrack. Для раздачи это dnsmasq тетеринга, для приложений — серверы текущей
-# сети, которые знает только DnsResolver.
-service steerd-dnsd /system_ext/bin/der/steer dnsd --spec /data/misc/steer/spec.json --upstream-origdst
-    class late_start
-    user root
-    group root net_admin net_raw inet vpn
-    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
-    seclabel u:r:steerd:s0
-    stdio_to_kmsg
-    gentle_kill
-    disabled
-
-# Помощники выходов со своим процессом: клиент VLESS/Reality, xsteer, обфускатор, мост
-# Telegram. Их состав зависит от спеки, а сервисы init объявлены статически, поэтому держит их
-# один сервис — `steer supervise` (перезапуск упавшего через 5 с, падающего сразу — с растущей
-# паузой до 5 минут; SIGHUP — сверить состав со спекой). Помощники исполняются в том же домене.
-service steerd-outputs /system_ext/bin/der/steer supervise --spec /data/misc/steer/spec.json
-    class late_start
-    user root
-    group root net_admin net_raw inet vpn
-    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
-    seclabel u:r:steerd:s0
-    stdio_to_kmsg
-    gentle_kill
-    disabled
-
-# Сторож устройств. На роутере это `while :; do steer failover; sleep 60; done` экземпляром
-# procd; здесь круг крутит сам движок (`--loop 60`), каждый проход — отдельный процесс.
-# Проверяет по событиям ядра (смена интерфейса или адреса — внеочередной проход) и по периоду
-# для того, чего событием не увидеть. Ожидание — на CLOCK_MONOTONIC: во сне устройства оно
-# стоит и не будит его; wakelock сторож не берёт.
-service steerd-failover /system_ext/bin/der/steer failover --loop 60 --spec /data/misc/steer/spec.json
-    class late_start
-    user root
-    group root net_admin net_raw inet vpn
-    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
-    seclabel u:r:steerd:s0
-    stdio_to_kmsg
-    gentle_kill
-    disabled
-
-# Снятие правил при выключении — разовое, как и применение: таблицы движка во всех раскладках,
-# ip rule, маршруты выходов, правило пробы и masquerade в iptables.
-service steerd-down /system_ext/bin/der/steer down --state-dir /data/misc/steer/state
-    class late_start
-    user root
-    group root net_admin net_raw inet vpn
-    capabilities NET_ADMIN NET_RAW NET_BIND_SERVICE
-    seclabel u:r:steerd:s0
-    stdio_to_kmsg
-    gentle_kill
-    oneshot
-    disabled
-
-# Включение по свойству. splify2 ставит persist.der.steer.enabled=1 — и init поднимает
-# помощников, apply и резолвер сразу: start не ждёт окончания oneshot. Сторожа — нет: его
-# первый проход, пришедшийся раньше apply, видит ядро без ip rule и без устройства туннеля и
-# пишет в журнал «маршрутизация разъехалась» и «туннель молчит» — на телефоне это было на
-# каждом включении. Чинить он умеет, но тревоги ложные, а журнал человек читает в приложении.
-#
-# Поэтому сторож стартует по окончании apply. Одного init.svc.steerd-apply=stopped мало:
-# после прошлого включения там уже «stopped», и на повторном 0 → 1 условие было бы истинно
-# сразу. Свойство der.steer.phase ставится ПОСЛЕ start steerd-apply — к этому моменту init уже
-# записал apply в running, — так что «applying && stopped» означает именно этот запуск.
-# Повторные apply (загрузка, netd) фазу не трогают, и сторож от них не перезапускается.
-# stop steerd-down — на случай быстрого переключения 0 → 1, чтобы снятие не легло поверх
-# только что поставленного.
+# Включение. stop steerd-down — на случай быстрого переключения 0 → 1, чтобы снятие не легло
+# поверх только что поставленного. При загрузке этот триггер срабатывает на загрузке persist-
+# свойств, раньше класса late_start: reload тогда не застаёт демона и ничего не делает, а
+# сохранённую спеку ставит сам демон при старте (--apply).
 on property:persist.der.steer.enabled=1
+    setprop der.steer.phase on
     stop steerd-down
-    start steerd-outputs
-    start steerd-apply
-    setprop der.steer.phase applying
-    start steerd-dnsd
+    start steerd-reload
 
-on property:der.steer.phase=applying && property:init.svc.steerd-apply=stopped
-    setprop der.steer.phase applied
-    start steerd-failover
-
-# netd при старте стирает ВСЕ ip rule, кроме приоритета 0 (RouteController::Init → flushRules),
-# и заново строит свои цепочки iptables — то есть наши правила 9000 и masquerade. При загрузке
-# порядка между netd и нашим apply нет, поэтому apply повторяется после загрузки и после
-# каждого (пере)запуска netd. Сторож и сам возвращает ip rule и masquerade на каждом проходе.
-on property:sys.boot_completed=1 && property:persist.der.steer.enabled=1
-    start steerd-apply
-on property:init.svc.netd=running && property:persist.der.steer.enabled=1
-    start steerd-apply
-
-# Выключение: гасим демонов и снимаем правила. Перезапуск демона правил нарочно не трогает
-# (открыть трафик на мгновение перезапуска хуже, чем подержать правила), но выключение —
-# другое: резолвер погашен насовсем, и заворот DNS на его порт, оставшись в ядре, лишил бы
-# имён всех, чей DNS заворачивался; blackhole выхода с on_fail=drop держал бы трафик закрытым
-# без видимой причины. При выключенном движке это срабатывает и на каждой загрузке — снимать
-# тогда нечего, и steer down просто ничего не находит.
-# steerd-ctl не гасится: он нужен и при выключенном движке (см. его описание выше).
+# Выключение: сначала reload — демон гасит сторожа и стража правил, иначе страж вернул бы
+# снятое, — и только по его окончании steerd-down. Порядок держит фаза der.steer.phase: она
+# ставится ПОСЛЕ start steerd-reload, когда init уже записал reload в running, поэтому
+# «off-reload && stopped» означает именно этот запуск, а не прошлый.
 on property:persist.der.steer.enabled=0
+    start steerd-reload
+    setprop der.steer.phase off-reload
+
+on property:der.steer.phase=off-reload && property:init.svc.steerd-reload=stopped
     setprop der.steer.phase off
-    stop steerd-failover
-    stop steerd-dnsd
-    stop steerd-outputs
     start steerd-down
+
+# Триггера на перезапуск netd больше нет. netd при старте стирает все ip rule, кроме приоритета
+# 0, и перестраивает свои цепочки iptables; демон видит пропажу своего правила 9000 событием
+# netlink (RTM_DELRULE) и за секунду-две возвращает ip rule, таблицы выходов и masquerade сам —
+# проверено в Cuttlefish на ядре GKI 6.12 (kill netd, вслед за ним перезапуск system_server).
 
 # Дальше (не сделано): выделенный uid AID_STEER вместо root. Сейчас демон root, но заперт
 # доменом steerd; на Android изоляцию даёт домен, а не uid, поэтому это улучшение, а не
