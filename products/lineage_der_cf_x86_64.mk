@@ -12,8 +12,11 @@ $(call inherit-product, device/google/cuttlefish/vsoc_x86_64/phone/aosp_cf.mk)
 # задаётся до подключения конфигурации Lineage.
 TARGET_FACE_UNLOCK_SUPPORTED := false
 # Модуль всё равно разбирается, и его обязательные библиотеки (только arm64) сверяются даже без
-# установки — каталог исключается из разбора Soong.
+# установки — каталог исключается из разбора Soong. Кроме interfaces: на AIDL
+# vendor.aospa.biometrics.face оттуда опирается services.core. Побеждает самый длинный
+# префикс (blueprint SourceRootDirAllowed), поэтому вложенный путь снова включается.
 PRODUCT_SOURCE_ROOT_DIRS += -packages/apps/FaceUnlock
+PRODUCT_SOURCE_ROOT_DIRS += packages/apps/FaceUnlock/interfaces
 
 include vendor/lineage/build/target/product/lineage_generic_target.mk
 
