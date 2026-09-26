@@ -5,7 +5,9 @@
 # BoardConfigLineage.mk и переменные, которых ждут модули vendor/lineage/build/soong.
 # TARGET_NO_KERNEL_OVERRIDE — ядро и модули берутся из TARGET_KERNEL_PATH, SYSTEM_DLKM_SRC и
 # KERNEL_MODULES_PATH доски Cuttlefish, а не собираются Lineage из исходников.
-$(call inherit-product, device/google/cuttlefish/vsoc_x86_64/phone/aosp_cf.mk)
+# vsoc_x86_64_only, а не vsoc_x86_64 образца Lineage: для проверки движка 32-битные библиотеки
+# не нужны, а с ними вся система собирается дважды (x86_64 и x86).
+$(call inherit-product, device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk)
 
 # Разблокировка по лицу DerpFest (ParanoidSense) — только с библиотеками arm64; на x86_64 её
 # зависимостей нет. Переключатель читается в vendor/lineage/config/derpfest.mk через ?=, поэтому
@@ -31,6 +33,7 @@ PRODUCT_IGNORE_ALL_ANDROIDMK := false
 PRODUCT_SOONG_ONLY := false
 
 PRODUCT_NAME := lineage_der_cf_x86_64
+PRODUCT_DEVICE := vsoc_x86_64_only
 PRODUCT_MODEL := Cuttlefish x86_64 phone (der-exp)
 
 # DerpFest кладёт в system библиотеку, которой нет в списке generic_system.mk; на телефоне
