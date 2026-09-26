@@ -20,6 +20,7 @@ Magisk.
 | `sepolicy/private/steerd.te` | Права демона и запреты, скрывающие движок от чужих приложений |
 | `sepolicy/private/splify2_app.te` | Домен приложения splify2 — единственной двери к движку |
 | `sepolicy/private/{file,property,seapp}_contexts` | Метки бинарников, данных, свойства и привязка приложения |
+| `kernel/gki-android16-6.12/` | Ядро GKI 6.12 с nf_tables без нарушения договора с модулями производителя (первая цель — OnePlus 15T): правка, фрагмент, скрипт сборки со сверкой контрольных сумм |
 | `manifest/beryllium.xml` | Локальный манифест: сводит устройство, ядро, блобы, nftables и vendor/der для `repo sync` |
 | `tools/ndk-check/` | Проверка сборки модулей `Android.bp` компилятором NDK и запуск в aarch64-VM |
 | `tools/sepolicy-check/` | Компиляция политики SELinux против настоящей `system/sepolicy` без полного дерева |

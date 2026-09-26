@@ -1,0 +1,2 @@
+# der-exp: фрагменты конфигурации поверх gki_defconfig для движка steer.
+exports_files(["nftables_defconfig"])

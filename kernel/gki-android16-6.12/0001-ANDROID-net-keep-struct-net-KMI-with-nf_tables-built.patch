@@ -1,0 +1,63 @@
+From fd5a2bee3801c2ce4c4171c9377750f27b73bdbb Mon Sep 17 00:00:00 2001
+From: xyzmean <163691714+xyzmean@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 12:18:22 +0300
+Subject: [PATCH] ANDROID: net: keep struct net KMI with nf_tables built in
+
+Move struct netns_nftables nft to the end of struct net and wrap it in
+ANDROID_KABI_IGNORE, so that GKI can be built with CONFIG_NF_TABLES=y
+while vendor modules built against the stock KMI still load.
+
+The member was in the middle of struct net under CONFIG_NF_TABLES, and
+enabling it shifted every later field: 1089 of 9358 exported symbols
+of android16-6.12 at 844001fb8721 changed their modversions CRC. At the
+end of the structure it takes the 16 bytes of tail padding, so
+sizeof(struct net) stays 4160 and no known offset moves; with the member
+hidden from gendwarfksyms all 9358 CRCs match the ones of the stock
+kernel_aarch64 build.
+
+Change-Id: I695f1ce634af3baf1415fb0f8501c78e465dab70
+---
+ include/net/net_namespace.h | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/include/net/net_namespace.h b/include/net/net_namespace.h
+index da93873df4db..f0c2e6c35d76 100644
+--- a/include/net/net_namespace.h
++++ b/include/net/net_namespace.h
+@@ -5,6 +5,7 @@
+ #ifndef __NET_NET_NAMESPACE_H
+ #define __NET_NET_NAMESPACE_H
+ 
++#include <linux/android_kabi.h>
+ #include <linux/atomic.h>
+ #include <linux/refcount.h>
+ #include <linux/workqueue.h>
+@@ -145,9 +146,6 @@ struct net {
+ #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+ 	struct netns_ct		ct;
+ #endif
+-#if defined(CONFIG_NF_TABLES) || defined(CONFIG_NF_TABLES_MODULE)
+-	struct netns_nftables	nft;
+-#endif
+ #if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+ 	struct netns_ft ft;
+ #endif
+@@ -189,6 +187,15 @@ struct net {
+ #if IS_ENABLED(CONFIG_SMC)
+ 	struct netns_smc	smc;
+ #endif
++#if defined(CONFIG_NF_TABLES) || defined(CONFIG_NF_TABLES_MODULE)
++	/*
++	 * der-exp: nf_tables включён поверх KMI GKI, собранного без него. Поле стоит
++	 * последним, чтобы не сдвигать ни одного поля, известного модулям производителя,
++	 * и ложится в выравнивающий хвост структуры (размер struct net не меняется);
++	 * ANDROID_KABI_IGNORE убирает его из подсчёта контрольных сумм gendwarfksyms.
++	 */
++	ANDROID_KABI_IGNORE(1, struct netns_nftables nft);
++#endif
+ } __randomize_layout;
+ 
+ #include <linux/seq_file_net.h>
+-- 
+2.43.0
+
